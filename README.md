@@ -122,3 +122,32 @@ Some building blocks available in **libp2p/IPFS** ecosystems are valuable (DHTs,
 
 ```bash
 pnpm install
+```
+
+### Quick in-process demo (memory transport)
+
+```js
+const { createInMemoryPair } = require("./src");
+
+const { nodeA, nodeB, start, stop } = createInMemoryPair();
+
+nodeB.on("message", ({ payload }) => {
+  console.log("nodeB received:", payload.toString());
+  stop();
+});
+
+start();
+nodeA.sendMessage(nodeB.alias, "hello from nodeA");
+```
+
+### Prototype layout (current)
+
+- `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT)
+- `src/identity.js`: keypairs, alias derivation, alias records
+- `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
+- `src/routing.js`: neighbor table + basic routing engine
+- `src/transport/memory.js`: in-process transport for local demos/tests
+- `src/dht.js`: in-memory DHT store for alias records
+- `src/shuffle.js`: shuffle policies (padding and delay)
+- `src/crypto.js`: AEAD helpers for payload protection
+- `src/demo.js`: in-process helpers for local testing
