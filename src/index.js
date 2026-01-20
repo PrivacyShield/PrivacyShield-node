@@ -1,5 +1,7 @@
 const { PrivacyShieldNode } = require("./node");
 const { MemoryTransport } = require("./transport/memory");
+const { TcpTransport } = require("./transport/tcp");
+const { BaseTransport } = require("./transport/base");
 const { MemoryDHTStore } = require("./dht");
 const { NeighborTable, SimpleRoutingEngine } = require("./routing");
 const { NoShufflePolicy, BasicShufflePolicy } = require("./shuffle");
@@ -13,18 +15,31 @@ const {
   importPublicKey,
   importPrivateKey,
 } = require("./identity");
-const { estimateCoordinates, quantizeCoordinate, distance } = require("./coordinates");
+const {
+  estimateCoordinates,
+  quantizeCoordinate,
+  quantizeAcrossScales,
+  distance,
+} = require("./coordinates");
 const { createPacket, encodePacket, decodePacket } = require("./packet");
 const {
   createSymmetricKey,
   encryptPayload,
   decryptPayload,
 } = require("./crypto");
+const {
+  createHandshakeOffer,
+  acceptHandshakeOffer,
+  finalizeHandshake,
+  deriveSessionKey,
+} = require("./handshake");
 const { linkPeers, createInMemoryPair } = require("./demo");
 
 module.exports = {
   PrivacyShieldNode,
   MemoryTransport,
+  TcpTransport,
+  BaseTransport,
   MemoryDHTStore,
   NeighborTable,
   SimpleRoutingEngine,
@@ -40,6 +55,7 @@ module.exports = {
   importPrivateKey,
   estimateCoordinates,
   quantizeCoordinate,
+  quantizeAcrossScales,
   distance,
   createPacket,
   encodePacket,
@@ -47,6 +63,10 @@ module.exports = {
   createSymmetricKey,
   encryptPayload,
   decryptPayload,
+  createHandshakeOffer,
+  acceptHandshakeOffer,
+  finalizeHandshake,
+  deriveSessionKey,
   linkPeers,
   createInMemoryPair,
 };

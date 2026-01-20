@@ -140,6 +140,48 @@ start();
 nodeA.sendMessage(nodeB.alias, "hello from nodeA");
 ```
 
+### Session handshake + encrypted payloads
+
+```js
+const { createInMemoryPair } = require("./src");
+
+const { nodeA, nodeB, start, establishSession } = createInMemoryPair();
+
+nodeB.on("session", ({ alias }) => {
+  console.log("session established with", alias);
+  nodeA.sendMessage(alias, "sealed", { encrypt: true });
+});
+
+nodeB.on("message", ({ payload }) => {
+  console.log("decrypted:", payload.toString());
+});
+
+start();
+establishSession(); // sends handshake offers both ways
+```
+
+### TCP transport (early)
+
+```js
+const { PrivacyShieldNode, TcpTransport } = require("./src");
+
+const transportA = new TcpTransport({ alias: "alice", port: 4001 });
+const transportB = new TcpTransport({ alias: "bob", port: 4002 });
+
+const nodeA = new PrivacyShieldNode({ transport: transportA });
+const nodeB = new PrivacyShieldNode({ transport: transportB });
+
+nodeA.addNeighbor({ alias: nodeB.alias, address: { host: "127.0.0.1", port: 4002 } });
+nodeB.addNeighbor({ alias: nodeA.alias, address: { host: "127.0.0.1", port: 4001 } });
+
+nodeB.on("message", ({ payload }) => console.log(payload.toString()));
+
+nodeA.start();
+nodeB.start();
+
+nodeA.sendMessage(nodeB.alias, "hello over TCP");
+```
+
 ### Prototype layout (current)
 
 - `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT)
@@ -147,7 +189,10 @@ nodeA.sendMessage(nodeB.alias, "hello from nodeA");
 - `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
 - `src/routing.js`: neighbor table + basic routing engine
 - `src/transport/memory.js`: in-process transport for local demos/tests
+- `src/transport/tcp.js`: TCP adapter for basic real network IO (newline-framed)
+- `src/transport/base.js`: minimal transport contract
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
 - `src/crypto.js`: AEAD helpers for payload protection
+- `src/handshake.js`: X25519 + Ed25519 session establishment utilities
 - `src/demo.js`: in-process helpers for local testing

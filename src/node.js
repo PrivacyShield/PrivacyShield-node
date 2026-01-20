@@ -1,12 +1,17 @@
 const { EventEmitter } = require("events");
 const { createPacket } = require("./packet");
 const { generateIdentity, deriveAlias, createAliasRecord } = require("./identity");
-const { estimateCoordinates } = require("./coordinates");
+const { estimateCoordinates, quantizeAcrossScales } = require("./coordinates");
 const { NeighborTable, SimpleRoutingEngine } = require("./routing");
 const { MemoryDHTStore } = require("./dht");
 const { MemoryTransport } = require("./transport/memory");
 const { NoShufflePolicy } = require("./shuffle");
 const { encryptPayload, decryptPayload } = require("./crypto");
+const {
+  createHandshakeOffer,
+  acceptHandshakeOffer,
+  finalizeHandshake,
+} = require("./handshake");
 
 class PrivacyShieldNode extends EventEmitter {
   constructor(options = {}) {
@@ -22,6 +27,10 @@ class PrivacyShieldNode extends EventEmitter {
     this.dht = options.dht || new MemoryDHTStore();
     this.maxTtl = options.maxTtl || 6;
     this.sessionKeys = new Map();
+    this.pendingHandshakes = new Map();
+    this.aliasCache = new Map();
+    this.coordinateSamples = [];
+    this.latestAliasRecord = null;
     this.started = false;
   }
 
@@ -44,22 +53,39 @@ class PrivacyShieldNode extends EventEmitter {
     this.started = false;
   }
 
-  publishAliasRecord() {
+  publishAliasRecord(options = {}) {
     const record = createAliasRecord(this.identity, {
       alias: this.alias,
-      coordinates: this.coordinates,
+      coordinates: options.coordinates || this.coordinates,
+      ttlMs: options.ttlMs,
     });
     this.dht.put(record);
+    this.latestAliasRecord = record;
+    this._cacheAliasRecord(record);
     return record;
   }
 
   updateCoordinates(samples) {
     this.coordinates = estimateCoordinates(samples);
+    this.regionTable = quantizeAcrossScales(this.coordinates);
     return this.coordinates;
   }
 
   addNeighbor(entry) {
-    return this.neighbors.add(entry);
+    const added = this.neighbors.add(entry);
+    if (
+      this.transport.registerPeer &&
+      added.address &&
+      typeof added.address === "object" &&
+      added.address.host &&
+      added.address.port
+    ) {
+      this.transport.registerPeer(added.alias, {
+        host: added.address.host,
+        port: added.address.port,
+      });
+    }
+    return added;
   }
 
   removeNeighbor(alias) {
@@ -78,6 +104,13 @@ class PrivacyShieldNode extends EventEmitter {
     });
   }
 
+  registerPeerAddress(alias, address) {
+    if (this.transport.registerPeer) {
+      this.transport.registerPeer(alias, address);
+    }
+    return this.neighbors.add({ alias, address });
+  }
+
   registerSessionKey(alias, key) {
     if (!Buffer.isBuffer(key)) {
       throw new Error("Session key must be a Buffer");
@@ -87,6 +120,47 @@ class PrivacyShieldNode extends EventEmitter {
 
   getSessionKey(alias) {
     return this.sessionKeys.get(alias) || null;
+  }
+
+  hasSessionKey(alias) {
+    return this.sessionKeys.has(alias);
+  }
+
+  resolveAlias(alias, options = {}) {
+    if (alias === this.alias && this.latestAliasRecord) {
+      return this.latestAliasRecord;
+    }
+    const now = Date.now();
+    if (options.useCache !== false) {
+      const cached = this.aliasCache.get(alias);
+      if (cached && cached.expiresAt > now) {
+        return cached.record;
+      }
+    }
+    const record = this.dht.get(alias);
+    if (record) {
+      this._cacheAliasRecord(record);
+    }
+    return record;
+  }
+
+  rotateIdentity(options = {}) {
+    const wasStarted = this.started;
+    if (wasStarted) {
+      this.stop();
+    }
+    this.identity = generateIdentity();
+    this.alias = deriveAlias(this.identity.publicKey);
+    if (this.transport.alias !== undefined) {
+      this.transport.alias = this.alias;
+    }
+    this.sessionKeys.clear();
+    this.pendingHandshakes.clear();
+    this.publishAliasRecord({ coordinates: options.coordinates || this.coordinates });
+    if (wasStarted) {
+      this.start();
+    }
+    return this.alias;
   }
 
   sendMessage(dstAlias, payload, options = {}) {
@@ -180,6 +254,7 @@ class PrivacyShieldNode extends EventEmitter {
           : null;
       if (latencyMs !== null) {
         this.neighbors.updateLatency(fromAlias, latencyMs);
+        this.recordLatencySample(fromAlias, latencyMs);
       }
     }
 
@@ -212,10 +287,18 @@ class PrivacyShieldNode extends EventEmitter {
         }
       }
     }
+    if (packet.metadata && packet.metadata.control === "handshake") {
+      this._handleHandshakeMessage(packet, fromAlias, payload);
+      return;
+    }
     this.emit("message", { packet, fromAlias, payload });
   }
 
   _resolveTargetCoordinates(alias) {
+    const cached = this.resolveAlias(alias);
+    if (cached && cached.coordinates) {
+      return cached.coordinates;
+    }
     const neighbor = this.neighbors.get(alias);
     if (neighbor) {
       return neighbor.coordinates;
@@ -225,6 +308,86 @@ class PrivacyShieldNode extends EventEmitter {
       return record.coordinates;
     }
     return null;
+  }
+
+  _cacheAliasRecord(record) {
+    this.aliasCache.set(record.alias, {
+      record,
+      expiresAt: record.expiresAt,
+    });
+  }
+
+  recordLatencySample(alias, latencyMs) {
+    this.coordinateSamples.push({ alias, latencyMs });
+    if (this.coordinateSamples.length > 50) {
+      this.coordinateSamples.shift();
+    }
+    this.updateCoordinates(this.coordinateSamples);
+  }
+
+  initiateSessionHandshake(dstAlias, options = {}) {
+    if (this.hasSessionKey(dstAlias)) {
+      return null;
+    }
+    if (this.pendingHandshakes.has(dstAlias)) {
+      return this.pendingHandshakes.get(dstAlias).offer;
+    }
+    if (!this.latestAliasRecord) {
+      this.publishAliasRecord();
+    }
+    const { offer, ephemeral } = createHandshakeOffer(this.identity, {
+      aliasRecord: this.latestAliasRecord,
+      coordinates: this.coordinates,
+    });
+    this.pendingHandshakes.set(dstAlias, { role: "initiator", offer, ephemeral });
+    const payload = Buffer.from(JSON.stringify({ type: "offer", offer }));
+    this.sendMessage(dstAlias, payload, {
+      ttl: options.ttl || 2,
+      metadata: { control: "handshake" },
+    });
+    return offer;
+  }
+
+  _handleHandshakeMessage(_packet, fromAlias, payload) {
+    try {
+      const message = JSON.parse(payload.toString("utf8"));
+      if (message.type === "offer" && message.offer) {
+        if (this.hasSessionKey(fromAlias)) {
+          return;
+        }
+        const pending = this.pendingHandshakes.get(fromAlias);
+        if (pending && pending.role === "initiator" && this.alias < fromAlias) {
+          // Prefer the existing outbound handshake to avoid double derivations.
+          return;
+        }
+        if (pending && pending.role === "initiator") {
+          this.pendingHandshakes.delete(fromAlias);
+        }
+        const { response, sessionKey } = acceptHandshakeOffer(message.offer, this.identity, {
+          aliasRecord: this.latestAliasRecord,
+          coordinates: this.coordinates,
+        });
+        this.registerSessionKey(fromAlias, sessionKey);
+        const outbound = Buffer.from(JSON.stringify({ type: "response", response }));
+        this.sendMessage(fromAlias, outbound, { ttl: 2, metadata: { control: "handshake" } });
+        this.emit("session", { alias: fromAlias, role: "responder", key: sessionKey });
+      } else if (message.type === "response" && message.response) {
+        const pending = this.pendingHandshakes.get(fromAlias);
+        if (!pending || pending.role !== "initiator") {
+          return;
+        }
+        const { sessionKey } = finalizeHandshake(
+          pending.offer,
+          message.response,
+          pending.ephemeral
+        );
+        this.registerSessionKey(fromAlias, sessionKey);
+        this.pendingHandshakes.delete(fromAlias);
+        this.emit("session", { alias: fromAlias, role: "initiator", key: sessionKey });
+      }
+    } catch (error) {
+      this.emit("drop", { reason: "handshake_error", fromAlias, error });
+    }
   }
 }
 

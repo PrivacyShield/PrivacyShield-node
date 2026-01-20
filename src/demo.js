@@ -29,6 +29,10 @@ function createInMemoryPair(options = {}) {
       nodeA.start();
       nodeB.start();
     },
+    establishSession() {
+      nodeA.initiateSessionHandshake(nodeB.alias);
+      nodeB.initiateSessionHandshake(nodeA.alias);
+    },
     stop() {
       nodeA.stop();
       nodeB.stop();

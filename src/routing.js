@@ -47,8 +47,11 @@ class NeighborTable {
 
 class SimpleRoutingEngine {
   constructor(options = {}) {
-    this.maxPaths = options.maxPaths || 1;
+    this.maxPaths = options.maxPaths || 2;
     this.allowRandomFallback = options.allowRandomFallback !== false;
+    this.churnIntervalMs = options.churnIntervalMs || 10_000;
+    this._lastChurnAt = 0;
+    this._cachedOrder = [];
   }
 
   selectNextHops(packet, neighborTable, targetCoordinates = null) {
@@ -67,10 +70,19 @@ class SimpleRoutingEngine {
             distance(b.coordinates, targetCoordinates)
         );
     } else if (this.allowRandomFallback) {
-      sorted = shuffle(neighbors.slice());
+      sorted = this._maybeChurn(neighbors.slice());
     }
 
     return sorted.slice(0, this.maxPaths);
+  }
+
+  _maybeChurn(neighbors) {
+    const now = Date.now();
+    if (!this._cachedOrder.length || now - this._lastChurnAt > this.churnIntervalMs) {
+      this._cachedOrder = shuffle(neighbors);
+      this._lastChurnAt = now;
+    }
+    return this._cachedOrder.slice();
   }
 }
 

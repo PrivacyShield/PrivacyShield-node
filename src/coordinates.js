@@ -50,6 +50,14 @@ function quantizeCoordinate(coordinate, regionSize) {
   };
 }
 
+function quantizeAcrossScales(coordinate, regionSizes = [0.25, 1, 5]) {
+  const table = {};
+  for (const size of regionSizes) {
+    table[size] = quantizeCoordinate(coordinate, size);
+  }
+  return table;
+}
+
 function distance(a, b) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
@@ -60,5 +68,6 @@ function distance(a, b) {
 module.exports = {
   estimateCoordinates,
   quantizeCoordinate,
+  quantizeAcrossScales,
   distance,
 };
