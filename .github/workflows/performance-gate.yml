@@ -1,0 +1,37 @@
+name: Performance Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test-and-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm install
+
+      - name: Unit Tests
+        run: npm test
+
+      - name: Performance Gate
+        run: npm run perf:gate
+        env:
+          ROUTING_MIN_OPS: "12000"
+          FRAMING_MIN_UTF8_OPS: "150000"
+          FRAMING_MIN_SPEEDUP: "1.05"
+          FRAMING_MIN_WIRE_REDUCTION: "20"
+

@@ -60,7 +60,11 @@ class SimpleRoutingEngine {
 
   selectNextHops(packet, neighborTable, targetCoordinates = null) {
     if (targetCoordinates) {
-      return this._selectNearest(neighborTable.values(), targetCoordinates);
+      return this._selectNearest(
+        neighborTable.values(),
+        targetCoordinates,
+        this.maxPaths
+      );
     }
 
     const neighbors = neighborTable.list();
@@ -82,11 +86,20 @@ class SimpleRoutingEngine {
     return this._cachedOrder.slice();
   }
 
-  _selectNearest(neighborIterator, targetCoordinates) {
-    const limit = Math.max(1, this.maxPaths);
+  _selectNearest(
+    neighborIterator,
+    targetCoordinates,
+    limit = this.maxPaths,
+    options = {}
+  ) {
+    const normalizedLimit = Math.max(1, limit);
+    const obfuscationNoise = Number.isFinite(options.obfuscationNoise)
+      ? Math.max(0, options.obfuscationNoise)
+      : 0;
     const best = [];
     for (const neighbor of neighborIterator) {
-      const rank = distance(neighbor.coordinates, targetCoordinates);
+      const rawRank = distance(neighbor.coordinates, targetCoordinates);
+      const rank = applyNoise(rawRank, obfuscationNoise);
       if (best.length === 0) {
         best.push({ neighbor, rank });
         continue;
@@ -97,14 +110,60 @@ class SimpleRoutingEngine {
         insertAt -= 1;
       }
 
-      if (insertAt < limit) {
+      if (insertAt < normalizedLimit) {
         best.splice(insertAt, 0, { neighbor, rank });
-        if (best.length > limit) {
+        if (best.length > normalizedLimit) {
           best.pop();
         }
       }
     }
     return best.map((entry) => entry.neighbor);
+  }
+}
+
+class DynamicConcurrentRoutingEngine extends SimpleRoutingEngine {
+  constructor(options = {}) {
+    super(options);
+    this.minPaths = Math.max(1, options.minPaths || 1);
+    this.dynamicPathSpread = options.dynamicPathSpread !== false;
+    this.obfuscationNoise = Math.max(0, options.obfuscationNoise || 0);
+  }
+
+  selectNextHops(packet, neighborTable, targetCoordinates = null) {
+    const neighbors = neighborTable.list();
+    if (!neighbors.length) {
+      return [];
+    }
+
+    const upper = Math.min(this.maxPaths, neighbors.length);
+    const lower = Math.min(this.minPaths, upper);
+    const pathCount = this._computePathCount(packet, lower, upper);
+
+    if (targetCoordinates) {
+      return this._selectNearest(
+        neighbors.values(),
+        targetCoordinates,
+        pathCount,
+        { obfuscationNoise: this.obfuscationNoise }
+      );
+    }
+
+    if (!this.allowRandomFallback) {
+      return neighbors.slice(0, pathCount);
+    }
+    return this._maybeChurn(neighbors.slice()).slice(0, pathCount);
+  }
+
+  _computePathCount(packet, lower, upper) {
+    if (!this.dynamicPathSpread || upper <= lower) {
+      return upper;
+    }
+    const ttl = packet && Number.isInteger(packet.ttl) ? packet.ttl : 1;
+    const ttlFactor = Math.max(0, Math.min(1, ttl / 6));
+    const pivot = lower + Math.round((upper - lower) * ttlFactor);
+    const min = Math.max(lower, pivot - 1);
+    const max = Math.min(upper, pivot + 1);
+    return randomInt(min, max);
   }
 }
 
@@ -116,7 +175,35 @@ function shuffle(items) {
   return items;
 }
 
+function applyNoise(value, noiseFactor) {
+  if (!noiseFactor || value === 0) {
+    return value;
+  }
+  const maxNoise = Math.max(0.0001, value * noiseFactor);
+  const offset = randomFloat(-maxNoise, maxNoise);
+  return value + offset;
+}
+
+function randomFloat(min, max) {
+  if (max <= min) {
+    return min;
+  }
+  const precision = 1_000_000;
+  const integer = crypto.randomInt(0, precision + 1);
+  return min + (max - min) * (integer / precision);
+}
+
+function randomInt(min, max) {
+  const upper = Math.max(min, max);
+  const lower = Math.min(min, max);
+  if (upper === lower) {
+    return upper;
+  }
+  return crypto.randomInt(lower, upper + 1);
+}
+
 module.exports = {
   NeighborTable,
   SimpleRoutingEngine,
+  DynamicConcurrentRoutingEngine,
 };

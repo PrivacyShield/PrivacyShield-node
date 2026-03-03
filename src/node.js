@@ -1,8 +1,13 @@
+const crypto = require("crypto");
 const { EventEmitter } = require("events");
 const { createPacket } = require("./packet");
 const { generateIdentity, deriveAlias, createAliasRecord } = require("./identity");
 const { estimateCoordinates, quantizeAcrossScales } = require("./coordinates");
-const { NeighborTable, SimpleRoutingEngine } = require("./routing");
+const {
+  NeighborTable,
+  SimpleRoutingEngine,
+  DynamicConcurrentRoutingEngine,
+} = require("./routing");
 const { MemoryDHTStore } = require("./dht");
 const { MemoryTransport } = require("./transport/memory");
 const { NoShufflePolicy } = require("./shuffle");
@@ -22,10 +27,21 @@ class PrivacyShieldNode extends EventEmitter {
     this.transport =
       options.transport || new MemoryTransport({ alias: this.alias });
     this.neighbors = options.neighbors || new NeighborTable();
-    this.routing = options.routing || new SimpleRoutingEngine();
+    const dynamicRoutingOptions = normalizeDynamicRoutingOptions(options);
+    this.routing =
+      options.routing ||
+      (dynamicRoutingOptions
+        ? new DynamicConcurrentRoutingEngine(dynamicRoutingOptions)
+        : new SimpleRoutingEngine());
     this.shufflePolicy = options.shufflePolicy || new NoShufflePolicy();
     this.dht = options.dht || new MemoryDHTStore();
     this.maxTtl = options.maxTtl || 6;
+    this.routeLaneCount = normalizePositiveInt(options.routeLaneCount, 4);
+    this.routeObfuscationDelayMs = normalizePositiveInt(
+      options.routeObfuscationDelayMs,
+      0
+    );
+    this._routeSequence = 0;
     this.sessionKeys = new Map();
     this.pendingHandshakes = new Map();
     this.aliasCache = new Map();
@@ -105,9 +121,6 @@ class PrivacyShieldNode extends EventEmitter {
   }
 
   registerPeerAddress(alias, address) {
-    if (this.transport.registerPeer) {
-      this.transport.registerPeer(alias, address);
-    }
     return this.addNeighbor({ alias, address });
   }
 
@@ -214,9 +227,12 @@ class PrivacyShieldNode extends EventEmitter {
       return false;
     }
 
-    for (const hop of nextHops) {
+    const routeGroupId = this._nextRouteGroupId(packet);
+    for (let hopIndex = 0; hopIndex < nextHops.length; hopIndex += 1) {
+      const hop = nextHops[hopIndex];
       const shuffle = this.shufflePolicy.apply(packet.payload);
       const metadata = { ...packet.metadata };
+      const routeLane = this._selectRouteLane(routeGroupId, hop.alias, hopIndex);
       const existingPadding = Number.isSafeInteger(metadata.paddingBytes)
         ? metadata.paddingBytes
         : 0;
@@ -225,6 +241,10 @@ class PrivacyShieldNode extends EventEmitter {
       } else if (existingPadding) {
         metadata.paddingBytes = existingPadding;
       }
+      metadata.routeGroup = routeGroupId;
+      metadata.routeLane = routeLane;
+      metadata.routeWidth = nextHops.length;
+      metadata.routeIndex = hopIndex;
 
       const outbound = {
         ...packet,
@@ -235,8 +255,10 @@ class PrivacyShieldNode extends EventEmitter {
       };
 
       const sendNow = () => this.transport.send(outbound, hop.alias);
-      if (shuffle.delayMs > 0) {
-        setTimeout(sendNow, shuffle.delayMs);
+      const routeDelayMs = this._computeRouteObfuscationDelay(packet);
+      const totalDelayMs = shuffle.delayMs + routeDelayMs;
+      if (totalDelayMs > 0) {
+        setTimeout(sendNow, totalDelayMs);
       } else {
         sendNow();
       }
@@ -332,6 +354,35 @@ class PrivacyShieldNode extends EventEmitter {
       record,
       expiresAt: record.expiresAt,
     });
+  }
+
+  _nextRouteGroupId(packet) {
+    this._routeSequence = (this._routeSequence + 1) % 0x7fffffff;
+    const dstAlias = packet && packet.dstAlias ? packet.dstAlias : "unknown";
+    return `${this.alias}:${dstAlias}:${this._routeSequence.toString(36)}`;
+  }
+
+  _selectRouteLane(routeGroupId, hopAlias, hopIndex) {
+    if (this.routeLaneCount <= 1) {
+      return 0;
+    }
+    const seed = `${routeGroupId}|${hopAlias}|${hopIndex}`;
+    let hash = 2166136261;
+    for (let i = 0; i < seed.length; i += 1) {
+      hash ^= seed.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0) % this.routeLaneCount;
+  }
+
+  _computeRouteObfuscationDelay(packet) {
+    if (this.routeObfuscationDelayMs <= 0) {
+      return 0;
+    }
+    if (packet.metadata && packet.metadata.control) {
+      return 0;
+    }
+    return crypto.randomInt(0, this.routeObfuscationDelayMs + 1);
   }
 
   _learnPeerFromPacket(fromAlias, packet) {
@@ -467,3 +518,21 @@ class PrivacyShieldNode extends EventEmitter {
 module.exports = {
   PrivacyShieldNode,
 };
+
+function normalizePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function normalizeDynamicRoutingOptions(options) {
+  if (options.dynamicRouting === true) {
+    return options.dynamicRoutingOptions || {};
+  }
+  if (options.dynamicRouting && typeof options.dynamicRouting === "object") {
+    return options.dynamicRouting;
+  }
+  return null;
+}

@@ -145,6 +145,12 @@ npm run bench:framing -- --iterations 100000 --payload-bytes 1024
 
 Performance strategy, benchmark snapshots, and tuning guidance live in `OPTIMIZATIONS.md`.
 
+### Run performance regression gate
+
+```bash
+npm run perf:gate
+```
+
 ### Practical TCP server/client workflow
 
 Create persistent identities:
@@ -177,6 +183,22 @@ npm run node:client -- \
   --message "hello practical" \
   --encrypt \
   --await-reply
+```
+
+Tune dynamic routing + transport batching/obfuscation (example):
+
+```bash
+npm run node:server -- \
+  --identity ./.privacyshield/server.identity.json \
+  --dynamic-routing true \
+  --min-paths 1 \
+  --max-paths 3 \
+  --route-obfuscation-delay-ms 3 \
+  --route-obfuscation-noise 0.08 \
+  --batch-window-ms 2 \
+  --batch-max-frames 24 \
+  --flush-jitter-ms 1 \
+  --lane-count 4
 ```
 
 ### Quick in-process demo (memory transport)
@@ -242,7 +264,7 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT)
 - `src/identity.js`: keypairs, alias derivation, alias records
 - `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
-- `src/routing.js`: neighbor table + basic routing engine
+- `src/routing.js`: neighbor table + simple/dynamic concurrent routing engines
 - `src/transport/memory.js`: in-process transport for local demos/tests
 - `src/transport/tcp.js`: TCP adapter for basic real network IO (newline-framed)
 - `src/transport/base.js`: minimal transport contract
@@ -256,6 +278,8 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/cli.js`: practical CLI for identity management and TCP server/client workflows
 - `scripts/bench-routing.js`: routing selection benchmark helper
 - `scripts/bench-framing.js`: TCP framing benchmark helper
+- `scripts/perf-gate.js`: benchmark threshold gate used locally and in CI
+- `.github/workflows/performance-gate.yml`: CI workflow for tests + perf regression checks
 
 ### Stability test harness (current)
 

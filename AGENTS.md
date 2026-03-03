@@ -6,7 +6,7 @@
 - `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT)
 - `src/identity.js`: keypairs, alias derivation, alias records
 - `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
-- `src/routing.js`: neighbor table + basic routing engine
+- `src/routing.js`: neighbor table + simple/dynamic concurrent routing engines
 - `src/transport/memory.js`: in-process transport for local demos/tests
 - `src/transport/tcp.js`: TCP adapter for real network IO
 - `src/transport/base.js`: minimal transport contract
@@ -20,6 +20,8 @@
 - `src/cli.js`: practical CLI (`identity:create`, `identity:show`, `server`, `client`)
 - `scripts/bench-routing.js`: routing next-hop benchmark runner
 - `scripts/bench-framing.js`: TCP framing benchmark runner
+- `scripts/perf-gate.js`: local benchmark threshold gate runner
+- `.github/workflows/performance-gate.yml`: CI job for tests + perf gate
 - `OPTIMIZATIONS.md`: performance strategy, benchmark snapshots, and tuning plan
 
 ## Test workflow
@@ -32,6 +34,9 @@
 - `npm run node:client -- --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply]`: send a practical client message over TCP.
 - `npm run bench:routing -- --neighbors <n> --iterations <n> --max-paths <n>`: benchmark routing next-hop selection throughput.
 - `npm run bench:framing -- --iterations <n> --payload-bytes <n>`: benchmark TCP framing encode/decode cost and wire size.
+- `npm run perf:gate`: enforce benchmark thresholds and fail on regressions.
+- `npm run node:server -- --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n>`: run high-performance dynamic routing over pooled TCP connections.
+- `npm run node:client -- --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n>`: client-side equivalent tuning knobs.
 
 ## Test structure
 

@@ -14,7 +14,8 @@
     "node:server": "node src/cli.js server",
     "node:client": "node src/cli.js client",
     "bench:routing": "node scripts/bench-routing.js",
-    "bench:framing": "node scripts/bench-framing.js"
+    "bench:framing": "node scripts/bench-framing.js",
+    "perf:gate": "node scripts/perf-gate.js"
   },
   "repository": {
     "type": "git",

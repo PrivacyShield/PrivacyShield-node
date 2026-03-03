@@ -32,6 +32,35 @@ This document tracks performance-focused implementation work, measurable baselin
   - `test/packet.test.js`
   - `test/tcp.integration.test.js` (includes legacy frame compatibility test).
 
+### 3. TCP connection reuse + small write batching
+
+- File: `src/transport/tcp.js`
+- Changes:
+  - Added pooled outbound connections keyed by `host:port`.
+  - Added lane-aware batching scheduler (`batchWindowMs`, `batchMaxFrames`, `batchMaxBytes`).
+  - Added idle socket keepalive controls and reconnect-on-queue behavior.
+  - Added transport stats (`getStats`) for validation/benchmarking.
+- Effect:
+  - Fewer socket creations under burst traffic.
+  - Better throughput via coalesced writes.
+  - Improved multiplexing readiness for dynamic routing lanes.
+- Safety coverage:
+  - `test/tcp.integration.test.js` validates connection reuse and batching.
+
+### 4. Concurrent dynamic routing + latency obfuscation
+
+- Files: `src/routing.js`, `src/node.js`
+- Changes:
+  - Added `DynamicConcurrentRoutingEngine` with adaptive path count (`minPaths`/`maxPaths`) and optional distance-noise obfuscation.
+  - Node forwarding now tags packets with route group/lane metadata (`routeGroup`, `routeLane`, `routeWidth`, `routeIndex`).
+  - Added per-packet route-obfuscation jitter (`routeObfuscationDelayMs`) for timing camouflage.
+- Effect:
+  - Concurrent multi-path forwarding behavior with logical lane multiplexing over reused TCP connections.
+  - Improved uncertainty in traffic timing and route shape without breaking delivery semantics.
+- Safety coverage:
+  - `test/routing.test.js`
+  - `test/node.integration.test.js`
+
 ## Benchmark commands
 
 ```bash
@@ -49,10 +78,10 @@ Environment: local developer machine, Node.js `v24.9.0`.
 {
   "benchmark": "routing-selectNextHops",
   "neighbors": 5000,
-  "iterations": 20000,
+  "iterations": 10000,
   "maxPaths": 3,
-  "elapsedMs": 744.926,
-  "opsPerSec": 26848.3
+  "elapsedMs": 338.956,
+  "opsPerSec": 29502.3
 }
 ```
 
@@ -61,16 +90,25 @@ Environment: local developer machine, Node.js `v24.9.0`.
 ```json
 {
   "benchmark": "tcp-framing-encode-decode",
-  "iterations": 100000,
+  "iterations": 50000,
   "payloadBytes": 1024,
-  "utf8FrameOpsPerSec": 321036.8,
-  "legacyBase64FrameOpsPerSec": 237797.8,
-  "speedup": 1.35,
+  "utf8FrameOpsPerSec": 408408.7,
+  "legacyBase64FrameOpsPerSec": 244663,
+  "speedup": 1.669,
   "utf8FrameBytes": 1516,
   "legacyBase64FrameBytes": 2024,
   "wireReductionPercent": 25.1
 }
 ```
+
+### Performance gate snapshot
+
+`npm run perf:gate` currently enforces:
+
+- `routing opsPerSec >= 15000`
+- `framing utf8FrameOpsPerSec >= 200000`
+- `framing speedup >= 1.1`
+- `framing wireReductionPercent >= 20`
 
 ## Practical tuning guidelines
 
@@ -86,7 +124,7 @@ Environment: local developer machine, Node.js `v24.9.0`.
 
 ## Next optimization targets
 
-1. Connection reuse and small write batching for TCP transport.
+1. Transport-level cover traffic scheduling with bounded overhead.
 2. Alias/DHT lookup caching policy tuning (positive + negative cache windows).
 3. Coordinated benchmark suite for in-memory vs TCP forwarding throughput.
 4. Adversarial/perf simulations (packet loss, high-latency links, route churn pressure).
@@ -98,4 +136,3 @@ Before merging a performance change:
 1. `npm test`
 2. Relevant benchmark command(s) from this file
 3. Update this document with new benchmark snapshots and note regressions/tradeoffs
-

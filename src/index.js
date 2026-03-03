@@ -3,7 +3,11 @@ const { MemoryTransport } = require("./transport/memory");
 const { TcpTransport } = require("./transport/tcp");
 const { BaseTransport } = require("./transport/base");
 const { MemoryDHTStore } = require("./dht");
-const { NeighborTable, SimpleRoutingEngine } = require("./routing");
+const {
+  NeighborTable,
+  SimpleRoutingEngine,
+  DynamicConcurrentRoutingEngine,
+} = require("./routing");
 const { NoShufflePolicy, BasicShufflePolicy } = require("./shuffle");
 const {
   generateIdentity,
@@ -54,6 +58,7 @@ module.exports = {
   MemoryDHTStore,
   NeighborTable,
   SimpleRoutingEngine,
+  DynamicConcurrentRoutingEngine,
   NoShufflePolicy,
   BasicShufflePolicy,
   generateIdentity,

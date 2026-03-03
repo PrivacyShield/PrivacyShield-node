@@ -2,7 +2,11 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { NeighborTable, SimpleRoutingEngine } = require("../src/routing");
+const {
+  NeighborTable,
+  SimpleRoutingEngine,
+  DynamicConcurrentRoutingEngine,
+} = require("../src/routing");
 const { distance } = require("../src/coordinates");
 
 test("neighbor table requires alias entries", () => {
@@ -59,4 +63,34 @@ test("optimized nearest-path selection matches full-distance ordering", () => {
     .map((hop) => hop.alias);
 
   assert.deepEqual(optimized, expected);
+});
+
+test("dynamic routing varies concurrent path count within configured bounds", () => {
+  const table = new NeighborTable();
+  for (let i = 0; i < 12; i += 1) {
+    table.add({
+      alias: `d-${i}`,
+      coordinates: { x: i * 0.5, y: -i * 0.2, z: i % 3 },
+    });
+  }
+
+  const engine = new DynamicConcurrentRoutingEngine({
+    minPaths: 2,
+    maxPaths: 5,
+    dynamicPathSpread: true,
+    obfuscationNoise: 0.1,
+  });
+
+  const observed = new Set();
+  for (let i = 0; i < 80; i += 1) {
+    const count = engine.selectNextHops(
+      { ttl: 4 },
+      table,
+      { x: 1.2, y: -0.6, z: 1 }
+    ).length;
+    assert.equal(count >= 2 && count <= 5, true);
+    observed.add(count);
+  }
+
+  assert.equal(observed.size >= 2, true);
 });

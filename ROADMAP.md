@@ -18,13 +18,16 @@ Completed in the current prototype:
 - [x] Add a performance optimization track with benchmark scripts and `OPTIMIZATIONS.md`.
 - [x] Optimize routing next-hop selection to avoid full neighbor sorting on coordinate-based forwarding.
 - [x] Optimize TCP framing path by removing outer base64 framing overhead while keeping legacy compatibility.
+- [x] Add TCP connection reuse and small write batching for long-lived traffic.
+- [x] Add concurrent dynamic routing controls with lane metadata and route-obfuscation jitter.
+- [x] Add CI performance gates with benchmark thresholds (`.github/workflows/performance-gate.yml`).
 
 Current next implementation focus:
 
 - [ ] Extend transport adapters beyond TCP (QUIC/WebRTC where practical).
 - [ ] Add bootstrap discovery and DHT replication strategies.
-- [ ] Add TCP connection reuse/write batching and benchmark under long-lived traffic.
-- [ ] Add routing/transport performance CI gates with regression thresholds.
+- [ ] Add transport-level cover traffic strategies and profile their overhead/benefit.
+- [ ] Add adaptive threshold calibration for perf gates across heterogeneous CI runners.
 - [ ] Add conformance vectors, fuzz-style tests, and adversarial routing simulations.
 
 ## General roadmap (phases)

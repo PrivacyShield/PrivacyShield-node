@@ -7,10 +7,29 @@ const {
   MemoryDHTStore,
   MemoryTransport,
   BasicShufflePolicy,
+  DynamicConcurrentRoutingEngine,
   linkPeers,
   createSymmetricKey,
 } = require("../src");
 const { waitForEvent } = require("./helpers");
+
+class CaptureTransport {
+  constructor(alias) {
+    this.alias = alias;
+    this.sent = [];
+  }
+
+  start() {}
+
+  stop() {}
+
+  send(packet, destinationAlias) {
+    this.sent.push({ packet, destinationAlias });
+    return true;
+  }
+
+  registerPeer() {}
+}
 
 test.beforeEach(() => {
   MemoryTransport.reset();
@@ -157,4 +176,43 @@ test("latency sample history is bounded and keeps region quantization updated", 
   assert.equal(typeof node.coordinates.y, "number");
   assert.equal(typeof node.coordinates.z, "number");
   assert.equal(typeof node.regionTable["1"].x, "number");
+});
+
+test("dynamic routing annotates concurrent lane metadata for multiplexed transport", () => {
+  const transport = new CaptureTransport("node-a");
+  const routing = new DynamicConcurrentRoutingEngine({
+    minPaths: 2,
+    maxPaths: 3,
+    dynamicPathSpread: true,
+    obfuscationNoise: 0.05,
+  });
+  const node = new PrivacyShieldNode({
+    transport,
+    routing,
+    routeLaneCount: 4,
+    routeObfuscationDelayMs: 0,
+  });
+
+  node.addNeighbor({ alias: "n-1", coordinates: { x: 0, y: 0, z: 0 } });
+  node.addNeighbor({ alias: "n-2", coordinates: { x: 1, y: 0, z: 0 } });
+  node.addNeighbor({ alias: "n-3", coordinates: { x: 2, y: 0, z: 0 } });
+
+  const forwarded = node.sendMessage("unknown-target", Buffer.from("lane-test"), {
+    ttl: 4,
+  });
+  assert.equal(forwarded, true);
+  assert.equal(transport.sent.length >= 2 && transport.sent.length <= 3, true);
+
+  const routeGroups = new Set(
+    transport.sent.map((entry) => entry.packet.metadata.routeGroup)
+  );
+  assert.equal(routeGroups.size, 1);
+
+  for (let i = 0; i < transport.sent.length; i += 1) {
+    const metadata = transport.sent[i].packet.metadata;
+    assert.equal(Number.isInteger(metadata.routeLane), true);
+    assert.equal(metadata.routeLane >= 0 && metadata.routeLane < 4, true);
+    assert.equal(metadata.routeWidth, transport.sent.length);
+    assert.equal(metadata.routeIndex, i);
+  }
 });

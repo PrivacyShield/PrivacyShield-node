@@ -38,8 +38,8 @@ PrivacyShield practical CLI
 Commands:
   identity:create --identity <path>
   identity:show --identity <path>
-  server --identity <path> [--host 127.0.0.1] [--port 4001] [--echo]
-  client --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply]
+  server --identity <path> [--host 127.0.0.1] [--port 4001] [--echo] [--dynamic-routing true]
+  client --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply] [--dynamic-routing true]
 `);
 }
 
@@ -63,6 +63,87 @@ function parseTimeout(value, fallback) {
     throw new Error(`Invalid timeout: ${value}`);
   }
   return timeout;
+}
+
+function parsePositiveInt(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid integer value: ${value}`);
+  }
+  return parsed;
+}
+
+function parseFloatValue(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid float value: ${value}`);
+  }
+  return parsed;
+}
+
+function parseBool(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (value === true || value === false) {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Invalid boolean value: ${value}`);
+}
+
+function buildTransportOptions(args, alias, host, port) {
+  return {
+    alias,
+    host,
+    port,
+    laneCount: parsePositiveInt(args["lane-count"], 4),
+    batchWindowMs: parsePositiveInt(args["batch-window-ms"], 2),
+    batchMaxFrames: parsePositiveInt(args["batch-max-frames"], 24),
+    batchMaxBytes: parsePositiveInt(args["batch-max-bytes"], 64 * 1024),
+    flushJitterMs: parsePositiveInt(args["flush-jitter-ms"], 1),
+    socketIdleTimeoutMs: parsePositiveInt(args["socket-idle-timeout-ms"], 30_000),
+  };
+}
+
+function buildNodeOptions(args, identity, transport) {
+  const laneCount = parsePositiveInt(args["lane-count"], 4);
+  const dynamicRouting = parseBool(args["dynamic-routing"], true);
+  const minPaths = parsePositiveInt(args["min-paths"], 1);
+  const maxPaths = Math.max(minPaths, parsePositiveInt(args["max-paths"], 3));
+  const routeObfuscationDelayMs = parsePositiveInt(
+    args["route-obfuscation-delay-ms"],
+    2
+  );
+  const obfuscationNoise = parseFloatValue(args["route-obfuscation-noise"], 0.08);
+
+  const options = {
+    identity,
+    transport,
+    routeLaneCount: laneCount,
+    routeObfuscationDelayMs,
+  };
+  if (dynamicRouting) {
+    options.dynamicRouting = {
+      minPaths,
+      maxPaths,
+      dynamicPathSpread: true,
+      obfuscationNoise,
+    };
+  }
+  return options;
 }
 
 function waitForEvent(emitter, eventName, options = {}) {
@@ -168,12 +249,10 @@ async function runServer(args) {
   const readyTimeoutMs = parseTimeout(args["ready-timeout-ms"], 5_000);
   const { identity, alias, created } = loadOrCreateIdentity(identityPath);
 
-  const transport = new TcpTransport({
-    alias,
-    host,
-    port,
-  });
-  const node = new PrivacyShieldNode({ identity, transport });
+  const transport = new TcpTransport(
+    buildTransportOptions(args, alias, host, port)
+  );
+  const node = new PrivacyShieldNode(buildNodeOptions(args, identity, transport));
 
   node.on("session", ({ alias }) => {
     console.log(`[session] established with ${alias}`);
@@ -218,12 +297,10 @@ async function runClient(args) {
   const encrypt = args.encrypt === true;
 
   const { identity, alias, created } = loadOrCreateIdentity(identityPath);
-  const transport = new TcpTransport({
-    alias,
-    host,
-    port,
-  });
-  const node = new PrivacyShieldNode({ identity, transport });
+  const transport = new TcpTransport(
+    buildTransportOptions(args, alias, host, port)
+  );
+  const node = new PrivacyShieldNode(buildNodeOptions(args, identity, transport));
   node.on("drop", ({ reason, fromAlias }) => {
     console.error(`[drop] reason=${reason} from=${fromAlias || "unknown"}`);
   });

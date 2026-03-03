@@ -120,3 +120,85 @@ test("tcp transport accepts backward-compatible base64-framed packets", async ()
     node.stop();
   }
 });
+
+test("tcp transport reuses pooled connections and batches small writes", async () => {
+  const identityA = generateIdentity();
+  const identityB = generateIdentity();
+  const aliasA = deriveAlias(identityA.publicKey);
+  const aliasB = deriveAlias(identityB.publicKey);
+
+  const transportA = new TcpTransport({
+    alias: aliasA,
+    host: "127.0.0.1",
+    port: 0,
+    batchWindowMs: 6,
+    batchMaxFrames: 64,
+    batchMaxBytes: 128 * 1024,
+    flushJitterMs: 0,
+    socketIdleTimeoutMs: 5_000,
+    laneCount: 4,
+  });
+  const transportB = new TcpTransport({
+    alias: aliasB,
+    host: "127.0.0.1",
+    port: 0,
+    batchWindowMs: 0,
+  });
+
+  const nodeA = new PrivacyShieldNode({
+    identity: identityA,
+    transport: transportA,
+    dynamicRouting: { minPaths: 1, maxPaths: 1, obfuscationNoise: 0 },
+    routeObfuscationDelayMs: 0,
+  });
+  const nodeB = new PrivacyShieldNode({
+    identity: identityB,
+    transport: transportB,
+    dynamicRouting: { minPaths: 1, maxPaths: 1, obfuscationNoise: 0 },
+    routeObfuscationDelayMs: 0,
+  });
+
+  nodeA.start();
+  nodeB.start();
+
+  try {
+    const addressB = await waitForCondition(() => transportB.getAddress(), {
+      timeoutMs: 2_000,
+    });
+    nodeA.addNeighbor({
+      alias: aliasB,
+      address: { host: "127.0.0.1", port: addressB.port },
+    });
+
+    const total = 40;
+    let received = 0;
+    const allReceived = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for batched messages"));
+      }, 4_000);
+      nodeB.on("message", ({ fromAlias, payload }) => {
+        if (fromAlias !== aliasA || !payload.toString("utf8").startsWith("batch-")) {
+          return;
+        }
+        received += 1;
+        if (received >= total) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+    });
+
+    for (let i = 0; i < total; i += 1) {
+      nodeA.sendMessage(aliasB, Buffer.from(`batch-${i}`), { ttl: 3 });
+    }
+    await allReceived;
+
+    const stats = transportA.getStats();
+    assert.equal(stats.connectionsCreated, 1);
+    assert.equal(stats.framesSent >= total, true);
+    assert.equal(stats.batchesSent < stats.framesSent, true);
+  } finally {
+    nodeA.stop();
+    nodeB.stop();
+  }
+});
