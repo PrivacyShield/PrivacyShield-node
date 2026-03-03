@@ -291,5 +291,32 @@ test("dynamic routing annotates concurrent lane metadata for multiplexed transpo
     assert.equal(metadata.routeLane >= 0 && metadata.routeLane < 4, true);
     assert.equal(metadata.routeWidth, transport.sent.length);
     assert.equal(metadata.routeIndex, i);
+    assert.equal(typeof metadata.srcOverlayId, "string");
+    assert.equal(typeof metadata.srcSubRegionId, "string");
   }
+});
+
+test("node neighbors get stable overlay/sub-region metadata for ring routing", () => {
+  const node = new PrivacyShieldNode({
+    dynamicRouting: {
+      mode: "ring",
+      minPaths: 1,
+      maxPaths: 2,
+      dynamicPathSpread: false,
+      obfuscationNoise: 0,
+    },
+    overlayNamespace: "test-ring",
+    providerId: "provider-z",
+  });
+  const added = node.addNeighbor({
+    alias: "ring-peer",
+    address: { host: "127.0.0.1", port: 1234, providerId: "provider-a" },
+    coordinates: { x: 4, y: 3, z: 1 },
+  });
+
+  assert.equal(typeof added.metadata.overlayId, "string");
+  assert.equal(added.metadata.overlayId.length > 0, true);
+  assert.equal(typeof added.metadata.subRegionId, "string");
+  assert.equal(added.metadata.providerId, "provider-a");
+  assert.equal(node.getOverlayProfile().providerId, "provider-z");
 });

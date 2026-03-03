@@ -88,6 +88,35 @@ This document tracks performance-focused implementation work, measurable baselin
   - `test/handshake-crypto.test.js`
   - `test/node.integration.test.js`
 
+### 7. UDP transport path + adaptive UDP/TCP fallback
+
+- Files: `src/transport/udp.js`, `src/transport/adaptive.js`, `src/transport/tcp.js`
+- Changes:
+  - Added UDP adapter with datagram framing compatibility and NAT keepalive probes.
+  - Added adaptive transport wrapper that ranks transport success per peer and can mirror control-plane traffic to fallback links.
+  - Added candidate-aware peer address normalization across TCP/UDP for dual-stack path choices.
+- Effect:
+  - Enables dynamic alternative transport usage under changing network conditions.
+  - Reduces control-plane fragility when one path is unstable or filtered.
+- Safety coverage:
+  - `test/udp.integration.test.js`
+  - `test/adaptive.integration.test.js`
+
+### 8. Ring-aware IDs, provider diversity, and tunnel compatibility path
+
+- Files: `src/routing.js`, `src/node.js`, `src/tunnel.js`, `src/cli.js`
+- Changes:
+  - Added ring-aware routing engine using stable overlay IDs plus provider/sub-region diversity penalties.
+  - Added hashed sub-region IDs to improve routing precision without exposing raw coordinate buckets.
+  - Added tunnel binding/gateway bridge so legacy TCP apps can run over PrivacyShield without protocol changes.
+- Effect:
+  - Improves route diversity against single-provider concentration.
+  - Makes practical adoption easier for non-native clients/servers.
+- Safety coverage:
+  - `test/routing.test.js`
+  - `test/node.integration.test.js`
+  - `test/tunnel.integration.test.js`
+
 ## Benchmark commands
 
 ```bash
@@ -169,13 +198,17 @@ Environment: local developer machine, Node.js `v24.9.0`.
 - TCP deployment:
   - Prefer stable peer lists and long-running processes to avoid repeated handshake churn.
   - Keep `--echo` disabled in production-like tests unless explicitly needed.
+- Adaptive transport:
+  - Prefer `--transport adaptive` with explicit `--peer-port` and `--peer-udp-port` to keep both paths available.
+  - Keep UDP keepalive (`--udp-nat-keepalive-ms`) enabled when NAT churn is expected.
 
 ## Next optimization targets
 
 1. Alias/DHT lookup caching policy tuning (positive + negative cache windows).
-2. Coordinated benchmark suite for in-memory vs TCP forwarding throughput.
-3. Rekey hardening under packet loss and concurrent bi-direction rotations.
-4. Adversarial/perf simulations (packet loss, high-latency links, route churn pressure).
+2. Coordinated benchmark suite for in-memory vs TCP/UDP/adaptive forwarding throughput.
+3. Adaptive transport confidence model (ACK-driven fallback and dynamic path demotion).
+4. Rekey hardening under packet loss and concurrent bi-direction rotations.
+5. Adversarial/perf simulations (packet loss, high-latency links, route churn pressure).
 
 ## Optimization acceptance gate
 

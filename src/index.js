@@ -1,12 +1,16 @@
 const { PrivacyShieldNode } = require("./node");
 const { MemoryTransport } = require("./transport/memory");
 const { TcpTransport } = require("./transport/tcp");
+const { UdpTransport } = require("./transport/udp");
+const { AdaptiveTransport } = require("./transport/adaptive");
 const { BaseTransport } = require("./transport/base");
 const { MemoryDHTStore } = require("./dht");
 const {
   NeighborTable,
   SimpleRoutingEngine,
   DynamicConcurrentRoutingEngine,
+  RingAwareRoutingEngine,
+  deriveOverlayId,
 } = require("./routing");
 const { NoShufflePolicy, BasicShufflePolicy } = require("./shuffle");
 const {
@@ -52,16 +56,24 @@ const {
   loadOrCreateIdentity,
 } = require("./identity-store");
 const { linkPeers, createInMemoryPair } = require("./demo");
+const {
+  PrivacyShieldTunnelGateway,
+  PrivacyShieldTunnelBinding,
+} = require("./tunnel");
 
 module.exports = {
   PrivacyShieldNode,
   MemoryTransport,
   TcpTransport,
+  UdpTransport,
+  AdaptiveTransport,
   BaseTransport,
   MemoryDHTStore,
   NeighborTable,
   SimpleRoutingEngine,
   DynamicConcurrentRoutingEngine,
+  RingAwareRoutingEngine,
+  deriveOverlayId,
   NoShufflePolicy,
   BasicShufflePolicy,
   generateIdentity,
@@ -96,4 +108,6 @@ module.exports = {
   loadOrCreateIdentity,
   linkPeers,
   createInMemoryPair,
+  PrivacyShieldTunnelGateway,
+  PrivacyShieldTunnelBinding,
 };

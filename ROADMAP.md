@@ -24,12 +24,16 @@ Completed in the current prototype:
 - [x] Add transport-level cover traffic scheduling with bounded overhead controls and tests.
 - [x] Add split-share session rekey flow with route/lane jitter and encrypted noise packets.
 - [x] Add cover-traffic benchmark + CI perf gate thresholds (`scripts/bench-cover.js`).
+- [x] Add UDP transport adapter with keepalive probes and adaptive UDP/TCP transport fallback.
+- [x] Add ring-aware routing IDs with provider/sub-region diversity constraints.
+- [x] Add tunnel binding/gateway workflows to proxy non-PrivacyShield TCP clients/servers.
 
 Current next implementation focus:
 
-- [ ] Extend transport adapters beyond TCP (QUIC/WebRTC where practical).
+- [ ] Extend transport adapters beyond TCP/UDP (QUIC/WebRTC where practical).
 - [ ] Add bootstrap discovery and DHT replication strategies.
 - [ ] Add adaptive threshold calibration for perf gates across heterogeneous CI runners.
+- [ ] Harden adaptive transport delivery confidence (ACK-driven fallback and path scoring).
 - [ ] Harden rekey flow for concurrent bi-directional rotations under packet loss.
 - [ ] Add conformance vectors, fuzz-style tests, and adversarial routing simulations.
 

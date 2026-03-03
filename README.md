@@ -209,8 +209,43 @@ npm run node:server -- \
 
 Advanced privacy/performance knobs now available on both `server` and `client` commands:
 
+- Transport selection: `--transport tcp|udp|adaptive`, `--tcp-port`, `--udp-port`, `--peer-udp-port`, `--ipv6`, `--udp-nat-keepalive-ms`
+- Ring/provider-aware routing: `--ring-routing`, `--provider-diversity`, `--provider-id`, `--ring-weight`, `--provider-diversity-weight`, `--sub-region-diversity-weight`, `--overlay-namespace`
 - Cover traffic: `--cover-traffic`, `--cover-interval-ms`, `--cover-rate-bps`, `--cover-burst-bytes`, `--cover-packet-bytes`, `--max-cover-to-real-ratio`, `--cover-warmup-frames`
 - Rekey cadence/noise: `--rekey-interval-ms`, `--rekey-interval-jitter-ms`, `--rekey-share-count`, `--rekey-share-spread-ms`, `--rekey-noise-packets`, `--rekey-noise-bytes`, `--rekey-grace-ms`, `--rekey-ttl-jitter`
+
+### Tunnel workflow for non-PrivacyShield apps
+
+Expose an existing TCP service through a PrivacyShield node:
+
+```bash
+npm run node:tunnel:gateway -- \
+  --identity ./.privacyshield/gateway.identity.json \
+  --transport adaptive \
+  --target-host 127.0.0.1 \
+  --target-port 8080 \
+  --peer-alias <BIND_NODE_ALIAS> \
+  --peer-host <BIND_NODE_HOST> \
+  --peer-port 4001 \
+  --peer-udp-port 4001 \
+  --encrypt
+```
+
+Create a local transparent bind for legacy clients:
+
+```bash
+npm run node:tunnel:bind -- \
+  --identity ./.privacyshield/bind.identity.json \
+  --transport adaptive \
+  --peer-alias <GATEWAY_NODE_ALIAS> \
+  --peer-host <GATEWAY_NODE_HOST> \
+  --peer-port 4001 \
+  --peer-udp-port 4001 \
+  --target-host 127.0.0.1 \
+  --target-port 8080 \
+  --listen-host 127.0.0.1 \
+  --listen-port 18080
+```
 
 ### Quick in-process demo (memory transport)
 
@@ -275,9 +310,11 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT, session rekey)
 - `src/identity.js`: keypairs, alias derivation, alias records
 - `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
-- `src/routing.js`: neighbor table + simple/dynamic concurrent routing engines
+- `src/routing.js`: neighbor table + simple/dynamic/ring-aware routing engines
 - `src/transport/memory.js`: in-process transport for local demos/tests
 - `src/transport/tcp.js`: TCP adapter for real network IO (newline-framed, pooling, batching, cover scheduler)
+- `src/transport/udp.js`: UDP adapter with keepalive probes for NAT-sensitive paths
+- `src/transport/adaptive.js`: dynamic UDP/TCP fallback wrapper
 - `src/transport/base.js`: minimal transport contract
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
@@ -287,6 +324,7 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/identity-store.js`: filesystem identity persistence helpers
 - `src/demo.js`: in-process helpers for local testing
 - `src/cli.js`: practical CLI for identity management and TCP server/client workflows
+- `src/tunnel.js`: tunnel binding + gateway for transparent legacy TCP compatibility
 - `scripts/bench-routing.js`: routing selection benchmark helper
 - `scripts/bench-framing.js`: TCP framing benchmark helper
 - `scripts/bench-cover.js`: cover-traffic overhead benchmark helper
@@ -303,3 +341,6 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `test/coordinates.test.js`: coordinate estimation, quantization, and distance invariants
 - `test/identity-store.test.js`: filesystem identity persistence and integrity checks
 - `test/tcp.integration.test.js`: real TCP handshake and encrypted message flow with learned return routes plus bounded cover scheduling
+- `test/udp.integration.test.js`: real UDP handshake and encrypted message flow
+- `test/adaptive.integration.test.js`: adaptive UDP/TCP fallback behavior
+- `test/tunnel.integration.test.js`: transparent tunnel binding/gateway data-path behavior

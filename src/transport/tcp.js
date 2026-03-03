@@ -9,6 +9,7 @@ const {
 
 class TcpTransport {
   constructor(options = {}) {
+    this.protocol = "tcp";
     this.alias = options.alias;
     this.host = options.host || "127.0.0.1";
     this.port = options.port || 0;
@@ -90,10 +91,11 @@ class TcpTransport {
   }
 
   registerPeer(alias, address) {
-    if (!address || !address.host || !address.port) {
-      throw new Error("registerPeer requires { host, port }");
+    const normalized = normalizePeerAddress(address, "tcp");
+    if (!normalized) {
+      throw new Error("registerPeer requires TCP-compatible { host, port }");
     }
-    this.peers.set(alias, { host: address.host, port: address.port });
+    this.peers.set(alias, normalized);
     this._scheduleCoverTick();
   }
 
@@ -136,9 +138,9 @@ class TcpTransport {
     }
 
     const address =
-      addressHint ||
+      normalizePeerAddress(addressHint, "tcp") ||
       this.peers.get(destinationAlias) ||
-      this.onResolveAddress(destinationAlias);
+      normalizePeerAddress(this.onResolveAddress(destinationAlias), "tcp");
     if (!address) {
       return { ok: false, queuedBytes: 0 };
     }
@@ -589,6 +591,34 @@ function resolveLaneId(metadata, laneCount) {
     return Math.abs(metadata.routeLane) % laneCount;
   }
   return crypto.randomInt(0, laneCount);
+}
+
+function normalizePeerAddress(address, protocol) {
+  if (!address) {
+    return null;
+  }
+  if (Array.isArray(address)) {
+    for (const entry of address) {
+      const normalized = normalizePeerAddress(entry, protocol);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+  if (address && Array.isArray(address.candidates)) {
+    return normalizePeerAddress(address.candidates, protocol);
+  }
+  if (typeof address !== "object") {
+    return null;
+  }
+  if (protocol && address.protocol && address.protocol !== protocol) {
+    return null;
+  }
+  if (!address.host || !Number.isInteger(address.port) || address.port <= 0) {
+    return null;
+  }
+  return { host: address.host, port: address.port };
 }
 
 module.exports = {

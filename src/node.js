@@ -7,6 +7,8 @@ const {
   NeighborTable,
   SimpleRoutingEngine,
   DynamicConcurrentRoutingEngine,
+  RingAwareRoutingEngine,
+  deriveOverlayId,
 } = require("./routing");
 const { MemoryDHTStore } = require("./dht");
 const { MemoryTransport } = require("./transport/memory");
@@ -34,11 +36,18 @@ class PrivacyShieldNode extends EventEmitter {
       options.transport || new MemoryTransport({ alias: this.alias });
     this.neighbors = options.neighbors || new NeighborTable();
     const dynamicRoutingOptions = normalizeDynamicRoutingOptions(options);
+    this.overlayNamespace = options.overlayNamespace || "ps-ring-v1";
+    this.overlayId = deriveOverlayId(this.alias, this.overlayNamespace);
+    this.subRegionPrecision = Math.max(
+      1,
+      normalizePositiveInt(options.subRegionPrecision, 2)
+    );
+    this.providerId = options.providerId || null;
     this.routing =
       options.routing ||
-      (dynamicRoutingOptions
-        ? new DynamicConcurrentRoutingEngine(dynamicRoutingOptions)
-        : new SimpleRoutingEngine());
+      createRoutingEngine(dynamicRoutingOptions, {
+        overlayNamespace: this.overlayNamespace,
+      });
     this.shufflePolicy = options.shufflePolicy || new NoShufflePolicy();
     this.dht = options.dht || new MemoryDHTStore();
     this.maxTtl = options.maxTtl || 6;
@@ -125,18 +134,18 @@ class PrivacyShieldNode extends EventEmitter {
   }
 
   addNeighbor(entry) {
-    const added = this.neighbors.add(entry);
+    const normalized = this._normalizeNeighborEntry(entry);
+    const added = this.neighbors.add(normalized);
     if (
       this.transport.registerPeer &&
       added.address &&
-      typeof added.address === "object" &&
-      added.address.host &&
-      added.address.port
+      typeof added.address === "object"
     ) {
-      this.transport.registerPeer(added.alias, {
-        host: added.address.host,
-        port: added.address.port,
-      });
+      try {
+        this.transport.registerPeer(added.alias, added.address);
+      } catch (_error) {
+        // Ignore address shapes unsupported by the current transport.
+      }
     }
     return added;
   }
@@ -203,6 +212,7 @@ class PrivacyShieldNode extends EventEmitter {
     }
     this.identity = generateIdentity();
     this.alias = deriveAlias(this.identity.publicKey);
+    this.overlayId = deriveOverlayId(this.alias, this.overlayNamespace);
     if (this.transport.alias !== undefined) {
       this.transport.alias = this.alias;
     }
@@ -276,6 +286,15 @@ class PrivacyShieldNode extends EventEmitter {
       const shuffle = this.shufflePolicy.apply(packet.payload);
       const metadata = { ...packet.metadata };
       const routeLane = this._selectRouteLane(routeGroupId, hop.alias, hopIndex);
+      if (!metadata.srcOverlayId) {
+        metadata.srcOverlayId = this.overlayId;
+      }
+      if (!metadata.srcSubRegionId) {
+        metadata.srcSubRegionId = this._deriveSubRegionId(this.coordinates);
+      }
+      if (!metadata.providerId && this.providerId) {
+        metadata.providerId = this.providerId;
+      }
       const existingPadding = Number.isSafeInteger(metadata.paddingBytes)
         ? metadata.paddingBytes
         : 0;
@@ -637,28 +656,60 @@ class PrivacyShieldNode extends EventEmitter {
       packet.metadata && this._isValidPeerAddress(packet.metadata.replyAddress)
         ? packet.metadata.replyAddress
         : null;
+    const replyCandidates =
+      packet.metadata &&
+      Array.isArray(packet.metadata.replyCandidates) &&
+      packet.metadata.replyCandidates.length
+        ? packet.metadata.replyCandidates
+        : null;
+    const learnedAddress = replyCandidates
+      ? { candidates: replyCandidates }
+      : replyAddress;
+    const metadata = {
+      overlayId:
+        (packet.metadata && packet.metadata.srcOverlayId) ||
+        deriveOverlayId(fromAlias, this.overlayNamespace),
+      subRegionId:
+        (packet.metadata && packet.metadata.srcSubRegionId) ||
+        null,
+      providerId:
+        (packet.metadata && packet.metadata.providerId) ||
+        null,
+    };
 
     const existing = this.neighbors.get(fromAlias);
     if (!existing) {
       this.addNeighbor({
         alias: fromAlias,
-        address: replyAddress || fromAlias,
+        address: learnedAddress || fromAlias,
+        metadata,
       });
       return;
     }
 
     if (
-      replyAddress &&
+      learnedAddress &&
       (!existing.address ||
         typeof existing.address !== "object" ||
-        existing.address.host !== replyAddress.host ||
-        existing.address.port !== replyAddress.port)
+        !isSamePeerAddress(existing.address, learnedAddress))
     ) {
       this.addNeighbor({
         ...existing,
-        address: replyAddress,
+        address: learnedAddress,
+        metadata: {
+          ...(existing.metadata || {}),
+          ...metadata,
+        },
       });
+      return;
     }
+    this.addNeighbor({
+      ...existing,
+      metadata: {
+        ...(existing.metadata || {}),
+        ...metadata,
+      },
+    });
   }
 
   _isValidPeerAddress(address) {
@@ -670,6 +721,46 @@ class PrivacyShieldNode extends EventEmitter {
       address.port > 0 &&
       address.port < 65536
     );
+  }
+
+  _normalizeNeighborEntry(entry) {
+    const normalized = { ...entry };
+    const metadata = { ...(entry.metadata || {}) };
+    metadata.overlayId =
+      metadata.overlayId || deriveOverlayId(entry.alias, this.overlayNamespace);
+    metadata.subRegionId =
+      metadata.subRegionId || this._deriveSubRegionId(entry.coordinates);
+    metadata.providerId =
+      metadata.providerId || inferProviderIdFromAddress(entry.address);
+    normalized.metadata = metadata;
+    return normalized;
+  }
+
+  _deriveSubRegionId(coordinates) {
+    const source = coordinates || { x: 0, y: 0, z: 0 };
+    const quantized = quantizeAcrossScales(source);
+    const keys = Object.keys(quantized)
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isInteger(value))
+      .sort((a, b) => a - b);
+    if (!keys.length) {
+      return deriveOverlayId("region:origin", `${this.overlayNamespace}|sub`);
+    }
+    const precisionIndex = Math.min(this.subRegionPrecision - 1, keys.length - 1);
+    const scale = keys[precisionIndex];
+    const region = quantized[String(scale)] || quantized[scale];
+    const raw = `${scale}:${region.x}:${region.y}:${region.z}`;
+    return deriveOverlayId(raw, `${this.overlayNamespace}|sub`);
+  }
+
+  getOverlayProfile() {
+    return {
+      alias: this.alias,
+      overlayId: this.overlayId,
+      providerId: this.providerId || null,
+      subRegionId: this._deriveSubRegionId(this.coordinates),
+      namespace: this.overlayNamespace,
+    };
   }
 
   recordLatencySample(alias, latencyMs) {
@@ -1047,4 +1138,69 @@ function normalizeDynamicRoutingOptions(options) {
     return options.dynamicRouting;
   }
   return null;
+}
+
+function createRoutingEngine(dynamicRoutingOptions, options = {}) {
+  if (!dynamicRoutingOptions) {
+    return new SimpleRoutingEngine();
+  }
+  const mode = String(dynamicRoutingOptions.mode || "").toLowerCase();
+  if (mode === "ring" || dynamicRoutingOptions.ringAware === true) {
+    return new RingAwareRoutingEngine({
+      ...dynamicRoutingOptions,
+      overlayNamespace:
+        dynamicRoutingOptions.overlayNamespace || options.overlayNamespace,
+    });
+  }
+  return new DynamicConcurrentRoutingEngine(dynamicRoutingOptions);
+}
+
+function inferProviderIdFromAddress(address) {
+  if (!address || typeof address !== "object") {
+    return null;
+  }
+  if (typeof address.providerId === "string" && address.providerId) {
+    return address.providerId;
+  }
+  const candidates = Array.isArray(address.candidates) ? address.candidates : null;
+  if (candidates) {
+    const provider = candidates.find(
+      (entry) => entry && typeof entry.providerId === "string" && entry.providerId
+    );
+    if (provider) {
+      return provider.providerId;
+    }
+  }
+  if (typeof address.host === "string" && address.host) {
+    const parts = address.host.split(".");
+    if (parts.length >= 2) {
+      return `${parts[0]}-${parts[1]}`;
+    }
+  }
+  return null;
+}
+
+function isSamePeerAddress(a, b) {
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") {
+    return false;
+  }
+  if (a.host && b.host && a.port && b.port) {
+    return a.host === b.host && a.port === b.port;
+  }
+  const aCandidates = Array.isArray(a.candidates) ? a.candidates : [];
+  const bCandidates = Array.isArray(b.candidates) ? b.candidates : [];
+  if (!aCandidates.length || !bCandidates.length) {
+    return false;
+  }
+  const aSet = new Set(aCandidates.map((entry) => `${entry.host}:${entry.port}`));
+  const bSet = new Set(bCandidates.map((entry) => `${entry.host}:${entry.port}`));
+  if (aSet.size !== bSet.size) {
+    return false;
+  }
+  for (const key of aSet.values()) {
+    if (!bSet.has(key)) {
+      return false;
+    }
+  }
+  return true;
 }

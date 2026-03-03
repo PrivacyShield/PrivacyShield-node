@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { distance } = require("./coordinates");
+const OVERLAY_RING_SPACE = 2 ** 48;
 
 class NeighborTable {
   constructor() {
@@ -167,6 +168,108 @@ class DynamicConcurrentRoutingEngine extends SimpleRoutingEngine {
   }
 }
 
+class RingAwareRoutingEngine extends DynamicConcurrentRoutingEngine {
+  constructor(options = {}) {
+    super(options);
+    this.overlayNamespace = options.overlayNamespace || "ps-ring-v1";
+    this.coordinateWeight = normalizeFloat(options.coordinateWeight, 1);
+    this.ringWeight = normalizeFloat(options.ringWeight, 0.8);
+    this.latencyWeight = normalizeFloat(options.latencyWeight, 0.04);
+    this.providerDiversityWeight = normalizeFloat(
+      options.providerDiversityWeight,
+      0.9
+    );
+    this.subRegionDiversityWeight = normalizeFloat(
+      options.subRegionDiversityWeight,
+      0.5
+    );
+    this.enforceProviderDiversity = options.enforceProviderDiversity !== false;
+  }
+
+  selectNextHops(packet, neighborTable, targetCoordinates = null) {
+    const neighbors = neighborTable.list();
+    if (!neighbors.length) {
+      return [];
+    }
+
+    const upper = Math.min(this.maxPaths, neighbors.length);
+    const lower = Math.min(this.minPaths, upper);
+    const pathCount = this._computePathCount(packet, lower, upper);
+    const targetOverlayId =
+      packet && packet.dstAlias
+        ? deriveOverlayId(packet.dstAlias, this.overlayNamespace)
+        : null;
+
+    return this._selectRingDiversePaths(
+      neighbors,
+      pathCount,
+      targetCoordinates,
+      targetOverlayId
+    );
+  }
+
+  _selectRingDiversePaths(neighbors, pathCount, targetCoordinates, targetOverlayId) {
+    const selected = [];
+    const pending = neighbors.map((neighbor) => ({
+      neighbor,
+      baseScore: this._computeRingScore(neighbor, targetCoordinates, targetOverlayId),
+      providerId: inferProviderId(neighbor),
+      subRegionId: inferSubRegionId(neighbor),
+    }));
+
+    const usedProviders = new Set();
+    const usedSubRegions = new Set();
+
+    while (selected.length < pathCount && pending.length) {
+      let bestIndex = 0;
+      let bestScore = Number.POSITIVE_INFINITY;
+
+      for (let i = 0; i < pending.length; i += 1) {
+        const candidate = pending[i];
+        let score = candidate.baseScore;
+        if (this.enforceProviderDiversity && candidate.providerId) {
+          if (usedProviders.has(candidate.providerId)) {
+            score += this.providerDiversityWeight;
+          }
+        }
+        if (candidate.subRegionId && usedSubRegions.has(candidate.subRegionId)) {
+          score += this.subRegionDiversityWeight;
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          bestIndex = i;
+        }
+      }
+
+      const [picked] = pending.splice(bestIndex, 1);
+      selected.push(picked.neighbor);
+      if (picked.providerId) {
+        usedProviders.add(picked.providerId);
+      }
+      if (picked.subRegionId) {
+        usedSubRegions.add(picked.subRegionId);
+      }
+    }
+
+    return selected;
+  }
+
+  _computeRingScore(neighbor, targetCoordinates, targetOverlayId) {
+    const coordScore = targetCoordinates
+      ? distance(neighbor.coordinates, targetCoordinates) * this.coordinateWeight
+      : 0;
+    const overlayId = deriveOverlayId(neighbor.alias, this.overlayNamespace);
+    const ringScore = targetOverlayId
+      ? normalizedRingDistance(overlayId, targetOverlayId) * this.ringWeight
+      : 0;
+    const latencyScore = neighbor.latencyMs
+      ? neighbor.latencyMs * this.latencyWeight
+      : 0;
+    const raw = coordScore + ringScore + latencyScore;
+    return applyNoise(raw, this.obfuscationNoise);
+  }
+}
+
 function shuffle(items) {
   for (let i = items.length - 1; i > 0; i -= 1) {
     const j = crypto.randomInt(0, i + 1);
@@ -202,8 +305,54 @@ function randomInt(min, max) {
   return crypto.randomInt(lower, upper + 1);
 }
 
+function deriveOverlayId(value, namespace = "ps-ring-v1") {
+  const normalized = `${namespace}|${value || ""}`;
+  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+}
+
+function normalizedRingDistance(a, b) {
+  const aNum = parseHex48(a);
+  const bNum = parseHex48(b);
+  const direct = Math.abs(aNum - bNum);
+  const wrapped = OVERLAY_RING_SPACE - direct;
+  return Math.min(direct, wrapped) / OVERLAY_RING_SPACE;
+}
+
+function parseHex48(value) {
+  const normalized =
+    typeof value === "string" && value.length ? value.slice(0, 12) : "0";
+  return Number.parseInt(normalized, 16) || 0;
+}
+
+function inferProviderId(neighbor) {
+  if (!neighbor || !neighbor.metadata) {
+    return null;
+  }
+  return neighbor.metadata.providerId || null;
+}
+
+function inferSubRegionId(neighbor) {
+  if (!neighbor || !neighbor.metadata) {
+    return null;
+  }
+  return neighbor.metadata.subRegionId || null;
+}
+
+function normalizeFloat(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
 module.exports = {
   NeighborTable,
   SimpleRoutingEngine,
   DynamicConcurrentRoutingEngine,
+  RingAwareRoutingEngine,
+  deriveOverlayId,
 };

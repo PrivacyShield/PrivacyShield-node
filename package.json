@@ -13,6 +13,8 @@
     "identity:show": "node src/cli.js identity:show",
     "node:server": "node src/cli.js server",
     "node:client": "node src/cli.js client",
+    "node:tunnel:gateway": "node src/cli.js tunnel:gateway",
+    "node:tunnel:bind": "node src/cli.js tunnel:bind",
     "bench:routing": "node scripts/bench-routing.js",
     "bench:framing": "node scripts/bench-framing.js",
     "bench:cover": "node scripts/bench-cover.js",

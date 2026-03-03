@@ -5,6 +5,10 @@ const path = require("path");
 const {
   PrivacyShieldNode,
   TcpTransport,
+  UdpTransport,
+  AdaptiveTransport,
+  PrivacyShieldTunnelGateway,
+  PrivacyShieldTunnelBinding,
   loadIdentityFromFile,
   loadOrCreateIdentity,
   saveIdentityToFile,
@@ -38,14 +42,25 @@ PrivacyShield practical CLI
 Commands:
   identity:create --identity <path>
   identity:show --identity <path>
-  server --identity <path> [--host 127.0.0.1] [--port 4001] [--echo] [routing/transport/rekey flags]
-  client --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply] [routing/transport/rekey flags]
+  server --identity <path> [--transport tcp|udp|adaptive] [--host 127.0.0.1] [--port 4001] [--echo]
+  client --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply]
+  tunnel:gateway --identity <path> --target-port <port> [--target-host 127.0.0.1] [--peer-alias <alias> --peer-host <host> --peer-port <port>]
+  tunnel:bind --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --target-port <port> [--target-host 127.0.0.1]
 
-Key tuning flags:
-  Routing: --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float>
-  Transport: --lane-count <n> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms>
-  Cover: --cover-traffic true --cover-interval-ms <ms> --cover-rate-bps <n> --max-cover-to-real-ratio <ratio>
-  Rekey: --rekey-interval-ms <ms> --rekey-share-count <n> --rekey-noise-packets <n> --rekey-grace-ms <ms>
+Transport flags:
+  --transport tcp|udp|adaptive
+  --tcp-port <port> --udp-port <port> --peer-udp-port <port>
+  --ipv6 true --udp-nat-keepalive-ms <ms> --udp-keepalive-fanout <n>
+
+Routing flags:
+  --dynamic-routing true --min-paths <n> --max-paths <n>
+  --ring-routing true --provider-diversity true --provider-id <id>
+  --ring-weight <float> --provider-diversity-weight <float> --sub-region-diversity-weight <float>
+
+Security/obfuscation flags:
+  --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float>
+  --cover-traffic true --cover-interval-ms <ms> --cover-rate-bps <n> --max-cover-to-real-ratio <ratio>
+  --rekey-interval-ms <ms> --rekey-share-count <n> --rekey-noise-packets <n> --rekey-grace-ms <ms>
 `);
 }
 
@@ -110,7 +125,15 @@ function parseBool(value, fallback) {
   throw new Error(`Invalid boolean value: ${value}`);
 }
 
-function buildTransportOptions(args, alias, host, port) {
+function parseTransportMode(value) {
+  const mode = String(value || "tcp").trim().toLowerCase();
+  if (!["tcp", "udp", "adaptive"].includes(mode)) {
+    throw new Error(`Invalid transport mode: ${value}`);
+  }
+  return mode;
+}
+
+function buildTcpTransportOptions(args, alias, host, port) {
   return {
     alias,
     host,
@@ -134,9 +157,88 @@ function buildTransportOptions(args, alias, host, port) {
   };
 }
 
+function buildUdpTransportOptions(args, alias, host, port) {
+  return {
+    alias,
+    host,
+    port,
+    ipv6: parseBool(args.ipv6, false),
+    natKeepaliveMs: parsePositiveInt(args["udp-nat-keepalive-ms"], 15_000),
+    keepaliveFanout: Math.max(1, parsePositiveInt(args["udp-keepalive-fanout"], 3)),
+  };
+}
+
+function buildTransport(args, alias, host, port) {
+  const mode = parseTransportMode(args.transport);
+  if (mode === "tcp") {
+    return new TcpTransport(buildTcpTransportOptions(args, alias, host, port));
+  }
+  if (mode === "udp") {
+    return new UdpTransport(buildUdpTransportOptions(args, alias, host, port));
+  }
+
+  const tcpPort = parsePort(args["tcp-port"], port);
+  const udpPort = parsePort(args["udp-port"], port);
+  const tcpTransport = new TcpTransport(
+    buildTcpTransportOptions(args, alias, host, tcpPort)
+  );
+  tcpTransport.name = "tcp";
+  const udpTransport = new UdpTransport(
+    buildUdpTransportOptions(args, alias, host, udpPort)
+  );
+  udpTransport.name = "udp";
+  return new AdaptiveTransport({
+    alias,
+    transports: [udpTransport, tcpTransport],
+    preferredOrder: ["udp", "tcp"],
+  });
+}
+
+function buildPeerAddress(args, peerHost, peerPort) {
+  const mode = parseTransportMode(args.transport);
+  const peerProviderId = args["peer-provider-id"]
+    ? String(args["peer-provider-id"])
+    : null;
+  const peerUdpPort = parsePort(args["peer-udp-port"], peerPort);
+
+  if (mode === "tcp") {
+    return {
+      protocol: "tcp",
+      host: peerHost,
+      port: peerPort,
+      providerId: peerProviderId,
+    };
+  }
+  if (mode === "udp") {
+    return {
+      protocol: "udp",
+      host: peerHost,
+      port: peerUdpPort,
+      providerId: peerProviderId,
+    };
+  }
+  return {
+    candidates: [
+      {
+        protocol: "udp",
+        host: peerHost,
+        port: peerUdpPort,
+        providerId: peerProviderId,
+      },
+      {
+        protocol: "tcp",
+        host: peerHost,
+        port: peerPort,
+        providerId: peerProviderId,
+      },
+    ],
+  };
+}
+
 function buildNodeOptions(args, identity, transport) {
   const laneCount = parsePositiveInt(args["lane-count"], 4);
   const dynamicRouting = parseBool(args["dynamic-routing"], true);
+  const ringRouting = parseBool(args["ring-routing"], false);
   const minPaths = parsePositiveInt(args["min-paths"], 1);
   const maxPaths = Math.max(minPaths, parsePositiveInt(args["max-paths"], 3));
   const routeObfuscationDelayMs = parsePositiveInt(
@@ -144,12 +246,16 @@ function buildNodeOptions(args, identity, transport) {
     2
   );
   const obfuscationNoise = parseFloatValue(args["route-obfuscation-noise"], 0.08);
+  const overlayNamespace = String(args["overlay-namespace"] || "ps-ring-v1");
 
   const options = {
     identity,
     transport,
     routeLaneCount: laneCount,
     routeObfuscationDelayMs,
+    overlayNamespace,
+    subRegionPrecision: Math.max(1, parsePositiveInt(args["sub-region-precision"], 2)),
+    providerId: args["provider-id"] ? String(args["provider-id"]) : null,
     rekeyShareCount: Math.max(2, parsePositiveInt(args["rekey-share-count"], 3)),
     rekeyShareSpreadMs: parsePositiveInt(args["rekey-share-spread-ms"], 8),
     rekeyNoisePackets: parsePositiveInt(args["rekey-noise-packets"], 1),
@@ -159,14 +265,30 @@ function buildNodeOptions(args, identity, transport) {
     rekeyGraceMs: parsePositiveInt(args["rekey-grace-ms"], 15_000),
     rekeyTtlJitter: parsePositiveInt(args["rekey-ttl-jitter"], 1),
   };
+
   if (dynamicRouting) {
     options.dynamicRouting = {
+      mode: ringRouting ? "ring" : "dynamic",
+      ringAware: ringRouting,
       minPaths,
       maxPaths,
       dynamicPathSpread: true,
       obfuscationNoise,
+      overlayNamespace,
+      coordinateWeight: parseFloatValue(args["coordinate-weight"], 1),
+      ringWeight: parseFloatValue(args["ring-weight"], 0.8),
+      providerDiversityWeight: parseFloatValue(
+        args["provider-diversity-weight"],
+        0.9
+      ),
+      subRegionDiversityWeight: parseFloatValue(
+        args["sub-region-diversity-weight"],
+        0.5
+      ),
+      enforceProviderDiversity: parseBool(args["provider-diversity"], true),
     };
   }
+
   return options;
 }
 
@@ -229,16 +351,51 @@ function identityPathFromArgs(args, defaultPath) {
 }
 
 function printNodeAddress(node, transport, identityPath, created) {
-  const address = transport.getAddress();
+  const address = typeof transport.getAddress === "function" ? transport.getAddress() : null;
+  const base = {
+    alias: node.alias,
+    overlay: typeof node.getOverlayProfile === "function" ? node.getOverlayProfile() : null,
+    identityPath,
+    createdIdentity: created,
+  };
+
+  if (address && typeof address === "object" && address.host && address.port) {
+    console.log(
+      JSON.stringify({
+        ...base,
+        host: address.host,
+        port: address.port,
+        protocol: address.protocol || null,
+      })
+    );
+    return;
+  }
+
   console.log(
     JSON.stringify({
-      alias: node.alias,
-      host: address ? address.host : null,
-      port: address ? address.port : null,
-      identityPath,
-      createdIdentity: created,
+      ...base,
+      addresses: address,
     })
   );
+}
+
+function attachNodeLogs(node, args = {}) {
+  node.on("session", ({ alias }) => {
+    console.log(`[session] established with ${alias}`);
+  });
+  node.on("message", ({ packet, fromAlias, payload }) => {
+    if (packet && packet.metadata && packet.metadata.control === "tunnel") {
+      return;
+    }
+    const text = payload.toString("utf8");
+    console.log(`[message] from=${fromAlias || "unknown"} text=${text}`);
+    if (args.echo && fromAlias) {
+      node.sendMessage(fromAlias, payload, { encrypt: node.hasSessionKey(fromAlias) });
+    }
+  });
+  node.on("drop", ({ reason, fromAlias }) => {
+    console.error(`[drop] reason=${reason} from=${fromAlias || "unknown"}`);
+  });
 }
 
 async function runIdentityCreate(args) {
@@ -273,24 +430,9 @@ async function runServer(args) {
   const readyTimeoutMs = parseTimeout(args["ready-timeout-ms"], 5_000);
   const { identity, alias, created } = loadOrCreateIdentity(identityPath);
 
-  const transport = new TcpTransport(
-    buildTransportOptions(args, alias, host, port)
-  );
+  const transport = buildTransport(args, alias, host, port);
   const node = new PrivacyShieldNode(buildNodeOptions(args, identity, transport));
-
-  node.on("session", ({ alias }) => {
-    console.log(`[session] established with ${alias}`);
-  });
-  node.on("message", ({ fromAlias, payload }) => {
-    const text = payload.toString("utf8");
-    console.log(`[message] from=${fromAlias || "unknown"} text=${text}`);
-    if (args.echo && fromAlias) {
-      node.sendMessage(fromAlias, payload, { encrypt: node.hasSessionKey(fromAlias) });
-    }
-  });
-  node.on("drop", ({ reason, fromAlias }) => {
-    console.error(`[drop] reason=${reason} from=${fromAlias || "unknown"}`);
-  });
+  attachNodeLogs(node, args);
 
   node.start();
   await waitForCondition(() => transport.getAddress(), { timeoutMs: readyTimeoutMs });
@@ -318,22 +460,22 @@ async function runClient(args) {
   const readyTimeoutMs = parseTimeout(args["ready-timeout-ms"], 5_000);
   const handshakeTimeoutMs = parseTimeout(args["handshake-timeout-ms"], 5_000);
   const awaitReplyMs = parseTimeout(args["await-reply-ms"], 2_000);
-  const encrypt = args.encrypt === true;
+  const encrypt = parseBool(args.encrypt, false);
 
   const { identity, alias, created } = loadOrCreateIdentity(identityPath);
-  const transport = new TcpTransport(
-    buildTransportOptions(args, alias, host, port)
-  );
+  const transport = buildTransport(args, alias, host, port);
   const node = new PrivacyShieldNode(buildNodeOptions(args, identity, transport));
-  node.on("drop", ({ reason, fromAlias }) => {
-    console.error(`[drop] reason=${reason} from=${fromAlias || "unknown"}`);
-  });
+  attachNodeLogs(node);
 
   node.start();
   await waitForCondition(() => transport.getAddress(), { timeoutMs: readyTimeoutMs });
+  const peerAddress = buildPeerAddress(args, peerHost, peerPort);
   node.addNeighbor({
     alias: peerAlias,
-    address: { host: peerHost, port: peerPort },
+    address: peerAddress,
+    metadata: {
+      providerId: args["peer-provider-id"] ? String(args["peer-provider-id"]) : null,
+    },
   });
 
   if (encrypt) {
@@ -352,6 +494,8 @@ async function runClient(args) {
       peerAlias,
       peerHost,
       peerPort,
+      peerUdpPort: parsePort(args["peer-udp-port"], peerPort),
+      transport: parseTransportMode(args.transport),
       encrypt,
       sentBytes: Buffer.byteLength(String(args.message), "utf8"),
     })
@@ -367,6 +511,144 @@ async function runClient(args) {
 
   await sleep(25);
   node.stop();
+}
+
+async function runTunnelGateway(args) {
+  if (!args["target-port"]) {
+    throw new Error("tunnel:gateway requires --target-port");
+  }
+  const identityPath = identityPathFromArgs(args, ".privacyshield/gateway.identity.json");
+  const host = args.host || "127.0.0.1";
+  const port = parsePort(args.port, 4001);
+  const readyTimeoutMs = parseTimeout(args["ready-timeout-ms"], 5_000);
+  const targetHost = args["target-host"] || "127.0.0.1";
+  const targetPort = parsePort(args["target-port"]);
+  const handshakeTimeoutMs = parseTimeout(args["handshake-timeout-ms"], 5_000);
+
+  const { identity, alias, created } = loadOrCreateIdentity(identityPath);
+  const transport = buildTransport(args, alias, host, port);
+  const node = new PrivacyShieldNode(buildNodeOptions(args, identity, transport));
+  attachNodeLogs(node, args);
+
+  node.start();
+  await waitForCondition(() => transport.getAddress(), { timeoutMs: readyTimeoutMs });
+
+  if (args["peer-alias"] && args["peer-host"] && args["peer-port"]) {
+    const peerAlias = String(args["peer-alias"]);
+    const peerHost = String(args["peer-host"]);
+    const peerPort = parsePort(args["peer-port"]);
+    node.addNeighbor({
+      alias: peerAlias,
+      address: buildPeerAddress(args, peerHost, peerPort),
+    });
+    if (parseBool(args.encrypt, true)) {
+      const session = waitForEvent(node, "session", {
+        timeoutMs: handshakeTimeoutMs,
+        predicate: (event) => event.alias === peerAlias,
+      });
+      node.initiateSessionHandshake(peerAlias);
+      await session;
+    }
+  }
+
+  const gateway = new PrivacyShieldTunnelGateway({
+    node,
+    targetHost,
+    targetPort,
+    maxChunkBytes: parsePositiveInt(args["tunnel-chunk-bytes"], 1024),
+    requireSession: parseBool(args["tunnel-require-session"], true),
+    allowRemoteTarget: parseBool(args["tunnel-allow-remote-target"], false),
+  });
+  gateway.start();
+
+  printNodeAddress(node, transport, identityPath, created);
+  console.log(
+    JSON.stringify({
+      mode: "tunnel:gateway",
+      targetHost,
+      targetPort,
+      requireSession: parseBool(args["tunnel-require-session"], true),
+    })
+  );
+
+  await waitForShutdown(async () => {
+    gateway.stop();
+    node.stop();
+  });
+}
+
+async function runTunnelBind(args) {
+  if (!args["peer-alias"] || !args["peer-host"] || !args["peer-port"]) {
+    throw new Error("tunnel:bind requires --peer-alias, --peer-host, --peer-port");
+  }
+  if (!args["target-port"]) {
+    throw new Error("tunnel:bind requires --target-port");
+  }
+
+  const identityPath = identityPathFromArgs(args, ".privacyshield/bind.identity.json");
+  const host = args.host || "127.0.0.1";
+  const port = parsePort(args.port, 0);
+  const listenHost = args["listen-host"] || "127.0.0.1";
+  const listenPort = parsePort(args["listen-port"], 0);
+  const peerAlias = String(args["peer-alias"]);
+  const peerHost = String(args["peer-host"]);
+  const peerPort = parsePort(args["peer-port"]);
+  const targetHost = args["target-host"] || "127.0.0.1";
+  const targetPort = parsePort(args["target-port"]);
+  const readyTimeoutMs = parseTimeout(args["ready-timeout-ms"], 5_000);
+  const handshakeTimeoutMs = parseTimeout(args["handshake-timeout-ms"], 5_000);
+
+  const { identity, alias, created } = loadOrCreateIdentity(identityPath);
+  const transport = buildTransport(args, alias, host, port);
+  const node = new PrivacyShieldNode(buildNodeOptions(args, identity, transport));
+  attachNodeLogs(node);
+
+  node.start();
+  await waitForCondition(() => transport.getAddress(), { timeoutMs: readyTimeoutMs });
+  node.addNeighbor({
+    alias: peerAlias,
+    address: buildPeerAddress(args, peerHost, peerPort),
+  });
+
+  const requireSession = parseBool(args["tunnel-require-session"], true);
+  if (requireSession) {
+    const session = waitForEvent(node, "session", {
+      timeoutMs: handshakeTimeoutMs,
+      predicate: (event) => event.alias === peerAlias,
+    });
+    node.initiateSessionHandshake(peerAlias);
+    await session;
+  }
+
+  const binding = new PrivacyShieldTunnelBinding({
+    node,
+    remoteAlias: peerAlias,
+    listenHost,
+    listenPort,
+    targetHost,
+    targetPort,
+    maxChunkBytes: parsePositiveInt(args["tunnel-chunk-bytes"], 1024),
+    requireSession,
+  });
+  binding.start();
+  await waitForCondition(() => binding.getAddress(), { timeoutMs: readyTimeoutMs });
+
+  printNodeAddress(node, transport, identityPath, created);
+  console.log(
+    JSON.stringify({
+      mode: "tunnel:bind",
+      remoteAlias: peerAlias,
+      listen: binding.getAddress(),
+      targetHost,
+      targetPort,
+      requireSession,
+    })
+  );
+
+  await waitForShutdown(async () => {
+    binding.stop();
+    node.stop();
+  });
 }
 
 async function waitForShutdown(onShutdown) {
@@ -408,6 +690,14 @@ async function main() {
   }
   if (command === "client") {
     await runClient(args);
+    return;
+  }
+  if (command === "tunnel:gateway") {
+    await runTunnelGateway(args);
+    return;
+  }
+  if (command === "tunnel:bind") {
+    await runTunnelBind(args);
     return;
   }
 

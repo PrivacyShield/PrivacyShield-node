@@ -6,6 +6,8 @@ const {
   NeighborTable,
   SimpleRoutingEngine,
   DynamicConcurrentRoutingEngine,
+  RingAwareRoutingEngine,
+  deriveOverlayId,
 } = require("../src/routing");
 const { distance } = require("../src/coordinates");
 
@@ -93,4 +95,49 @@ test("dynamic routing varies concurrent path count within configured bounds", ()
   }
 
   assert.equal(observed.size >= 2, true);
+});
+
+test("overlay id derivation is stable for the same alias and namespace", () => {
+  const first = deriveOverlayId("abc123", "ns-a");
+  const second = deriveOverlayId("abc123", "ns-a");
+  const third = deriveOverlayId("abc123", "ns-b");
+  assert.equal(first, second);
+  assert.equal(first === third, false);
+});
+
+test("ring-aware routing favors provider diversity when multiple paths are selected", () => {
+  const table = new NeighborTable();
+  table.add({
+    alias: "r-1",
+    coordinates: { x: 0, y: 0, z: 0 },
+    metadata: { providerId: "prov-a", subRegionId: "sub-a" },
+  });
+  table.add({
+    alias: "r-2",
+    coordinates: { x: 0.1, y: 0, z: 0 },
+    metadata: { providerId: "prov-a", subRegionId: "sub-a" },
+  });
+  table.add({
+    alias: "r-3",
+    coordinates: { x: 0.2, y: 0, z: 0 },
+    metadata: { providerId: "prov-b", subRegionId: "sub-b" },
+  });
+
+  const engine = new RingAwareRoutingEngine({
+    minPaths: 2,
+    maxPaths: 2,
+    dynamicPathSpread: false,
+    obfuscationNoise: 0,
+    providerDiversityWeight: 100,
+    subRegionDiversityWeight: 10,
+    enforceProviderDiversity: true,
+  });
+  const hops = engine.selectNextHops(
+    { dstAlias: "target-node", ttl: 4 },
+    table,
+    { x: 0, y: 0, z: 0 }
+  );
+  assert.equal(hops.length, 2);
+  const providers = new Set(hops.map((hop) => hop.metadata.providerId));
+  assert.equal(providers.size, 2);
 });
