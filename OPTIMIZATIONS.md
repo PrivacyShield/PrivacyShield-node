@@ -117,12 +117,29 @@ This document tracks performance-focused implementation work, measurable baselin
   - `test/node.integration.test.js`
   - `test/tunnel.integration.test.js`
 
+### 9. Advanced adversarial network simulation harness (`netsim/`)
+
+- Files: `netsim/config.js`, `netsim/simulator.js`, `netsim/report.js`, `netsim/run.js`
+- Changes:
+  - Added deterministic discrete-event simulation profile for large virtual scenarios (default: `500` nodes, `30` minutes).
+  - Added per-node provider diversity, variable bandwidth/latency models, and route cache + just-in-time mutation behavior.
+  - Added per-node IPv4-only/dual-stack/IPv6-only assignment plus router/NAT profile effects (restricted/symmetric/CGNAT).
+  - Added randomized MITM campaigns (observe, delay, drop, tamper) with detection metrics.
+  - Added reputation TTL decay/refresh model and split-share key exchange stress simulation.
+  - Added report artifact generation (`report.json`, `report.md`) with auto-generated conclusions/recommendations.
+- Effect:
+  - Enables high-scale adversarial performance and security regression testing without long real-time runs.
+  - Surfaces routing and detection bottlenecks with provider-level diagnostics.
+- Safety coverage:
+  - `test/netsim.test.js`
+
 ## Benchmark commands
 
 ```bash
 npm run bench:routing -- --neighbors 5000 --iterations 20000 --max-paths 3
 npm run bench:framing -- --iterations 100000 --payload-bytes 1024
 npm run bench:cover -- --messages 300 --payload-bytes 256 --max-cover-to-real-ratio 0.5
+npm run netsim:run -- --scenario benchmark-500x30m --nodes 500 --duration-minutes 30 --no-write
 ```
 
 ## Benchmark snapshot (2026-03-03)
@@ -176,6 +193,27 @@ Environment: local developer machine, Node.js `v24.9.0`.
 }
 ```
 
+### Adversarial netsim snapshot (500 nodes / 30 minutes virtual)
+
+```json
+{
+  "benchmark": "netsim-adversarial",
+  "nodes": 500,
+  "durationMinutes": 30,
+  "tickMs": 500,
+  "packetsAttempted": 189857,
+  "successRate": 0.5966,
+  "throughputMbps": 0.3157,
+  "p95LatencyMs": 230.86,
+  "mitmAttempts": 7850,
+  "mitmDetectionRate": 0.4259,
+  "ipv6HopShare": 0.5115,
+  "connectivityDropRate": 0.2904,
+  "keyCompromiseRate": 0.0,
+  "runtimeMs": 1180
+}
+```
+
 ### Performance gate snapshot
 
 `npm run perf:gate` currently enforces:
@@ -208,7 +246,7 @@ Environment: local developer machine, Node.js `v24.9.0`.
 2. Coordinated benchmark suite for in-memory vs TCP/UDP/adaptive forwarding throughput.
 3. Adaptive transport confidence model (ACK-driven fallback and dynamic path demotion).
 4. Rekey hardening under packet loss and concurrent bi-direction rotations.
-5. Adversarial/perf simulations (packet loss, high-latency links, route churn pressure).
+5. Add CI gates for `netsim` metrics (success rate / p95 latency / MITM detection floors and compromise ceiling).
 
 ## Optimization acceptance gate
 

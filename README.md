@@ -152,6 +152,51 @@ Performance strategy, benchmark snapshots, and tuning guidance live in `OPTIMIZA
 npm run perf:gate
 ```
 
+### Run advanced adversarial network simulation (500 nodes / 30 minutes virtual time)
+
+```bash
+npm run netsim:run
+```
+
+This runs a deterministic discrete-event simulation under `netsim/` with:
+
+- per-node provider assignment, bandwidth profiles, and variable link latency
+- per-node IPv4-only / dual-stack / IPv6-only assignment
+- router and NAT profile simulation (open, restricted, symmetric, CGNAT)
+- route cache + just-in-time route churn/mutation
+- reputation scoring with TTL expiry/refresh
+- randomized MITM campaigns (observe/delay/drop/tamper)
+- split-share key exchange stress under adversarial routing
+
+Artifacts are written to `netsim/output/<scenario>-<timestamp>/`:
+
+- `report.json`: machine-readable metrics
+- `report.md`: complete report with conclusions and fix-focused recommendations
+
+Example tuning run:
+
+```bash
+npm run netsim:run -- \
+  --scenario 500x30m-high-pressure \
+  --nodes 500 \
+  --duration-minutes 30 \
+  --ipv6-preference 0.78 \
+  --translation-relay-probability 0.82 \
+  --nat-base-success 0.9 \
+  --mitm-hop-probability 0.03 \
+  --campaign-spawn-probability 0.05 \
+  --data-sessions-per-second 85 \
+  --noise-sessions-per-second 32
+```
+
+Useful IPv6/NAT tuning flags:
+
+- `--ipv4-only-share`, `--dual-stack-share`, `--ipv6-only-share`
+- `--ipv6-preference`
+- `--translation-relay-probability`
+- `--nat-base-success`
+- `--firewall-drop-probability`
+
 ### Practical TCP server/client workflow
 
 Create persistent identities:
@@ -325,6 +370,10 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/demo.js`: in-process helpers for local testing
 - `src/cli.js`: practical CLI for identity management and TCP server/client workflows
 - `src/tunnel.js`: tunnel binding + gateway for transparent legacy TCP compatibility
+- `netsim/config.js`: simulation defaults/normalization (500-node/30-minute profile)
+- `netsim/simulator.js`: discrete-event network simulator (routing, MITM, reputation TTL)
+- `netsim/report.js`: JSON/Markdown report generation with recommendations
+- `netsim/run.js`: CLI entrypoint for advanced simulation scenarios
 - `scripts/bench-routing.js`: routing selection benchmark helper
 - `scripts/bench-framing.js`: TCP framing benchmark helper
 - `scripts/bench-cover.js`: cover-traffic overhead benchmark helper
@@ -344,3 +393,4 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `test/udp.integration.test.js`: real UDP handshake and encrypted message flow
 - `test/adaptive.integration.test.js`: adaptive UDP/TCP fallback behavior
 - `test/tunnel.integration.test.js`: transparent tunnel binding/gateway data-path behavior
+- `test/netsim.test.js`: deterministic simulation stability checks (MITM pressure + report artifacts)

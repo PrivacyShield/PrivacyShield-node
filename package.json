@@ -18,6 +18,7 @@
     "bench:routing": "node scripts/bench-routing.js",
     "bench:framing": "node scripts/bench-framing.js",
     "bench:cover": "node scripts/bench-cover.js",
+    "netsim:run": "node netsim/run.js",
     "perf:gate": "node scripts/perf-gate.js"
   },
   "repository": {

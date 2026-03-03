@@ -21,6 +21,10 @@
 - `src/demo.js`: in-process helpers for local testing
 - `src/cli.js`: practical CLI (`identity:create`, `identity:show`, `server`, `client`)
 - `src/tunnel.js`: tunnel bridge helpers for non-PrivacyShield TCP clients/servers
+- `netsim/config.js`: default advanced simulation profile + override normalization
+- `netsim/simulator.js`: discrete-event simulator (provider diversity, IPv4/IPv6 stack modeling, router/NAT effects, MITM, reputation TTL, key-share stress)
+- `netsim/report.js`: simulation artifact rendering (`report.json`, `report.md`)
+- `netsim/run.js`: command-line runner for 500-node/30-minute virtual adversarial simulations
 - `scripts/bench-routing.js`: routing next-hop benchmark runner
 - `scripts/bench-framing.js`: TCP framing benchmark runner
 - `scripts/bench-cover.js`: cover-traffic overhead benchmark runner
@@ -41,6 +45,7 @@
 - `npm run bench:routing -- --neighbors <n> --iterations <n> --max-paths <n>`: benchmark routing next-hop selection throughput.
 - `npm run bench:framing -- --iterations <n> --payload-bytes <n>`: benchmark TCP framing encode/decode cost and wire size.
 - `npm run bench:cover -- --messages <n> --payload-bytes <n> --max-cover-to-real-ratio <ratio>`: benchmark cover-traffic overhead and throughput retention.
+- `npm run netsim:run -- [--nodes <n>] [--duration-minutes <n>] [--ipv4-only-share <float>] [--dual-stack-share <float>] [--ipv6-only-share <float>] [--ipv6-preference <float>] [--translation-relay-probability <float>] [--nat-base-success <float>] [--firewall-drop-probability <float>] [--mitm-hop-probability <float>] [--campaign-spawn-probability <float>] [--output-dir <path>]`: run advanced virtual adversarial simulation and produce JSON/Markdown reports.
 - `npm run perf:gate`: enforce benchmark thresholds and fail on regressions.
 - `npm run node:server -- --dynamic-routing true --ring-routing true --provider-diversity true --provider-id <id> --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n> --cover-traffic true --max-cover-to-real-ratio <ratio> --rekey-interval-ms <ms> --rekey-share-count <n>`: run ring-aware, provider-diverse high-performance routing with cover traffic + key rotation.
 - `npm run node:client -- --transport adaptive --peer-udp-port <port> --dynamic-routing true --ring-routing true --provider-diversity true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n> --cover-traffic true --max-cover-to-real-ratio <ratio> --rekey-interval-ms <ms> --rekey-share-count <n>`: client-side equivalent tuning knobs with UDP/TCP fallback.
@@ -58,4 +63,5 @@
 - `test/udp.integration.test.js`: real UDP handshake/message integration and session protection
 - `test/adaptive.integration.test.js`: adaptive transport UDP/TCP fallback behavior
 - `test/tunnel.integration.test.js`: tunnel binding/gateway interoperability for legacy TCP traffic
+- `test/netsim.test.js`: simulation stability assertions (defaults, IPv4/IPv6+NAT effects, adversarial MITM pressure, artifact generation)
 - `test/helpers.js`: async event waiting helper shared by integration tests
