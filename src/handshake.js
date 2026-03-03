@@ -20,8 +20,17 @@ function signHandshakePayload(payload, privateKey) {
 }
 
 function verifyHandshakePayload(payload, signature, publicKeyEncoded) {
-  const publicKey = importPublicKey(publicKeyEncoded);
-  return crypto.verify(null, canonicalize(payload), publicKey, Buffer.from(signature, "base64"));
+  try {
+    const publicKey = importPublicKey(publicKeyEncoded);
+    return crypto.verify(
+      null,
+      canonicalize(payload),
+      publicKey,
+      Buffer.from(signature, "base64")
+    );
+  } catch (_error) {
+    return false;
+  }
 }
 
 function deriveSessionKey(sharedSecret, initiatorAlias, responderAlias) {

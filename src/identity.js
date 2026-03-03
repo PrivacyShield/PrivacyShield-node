@@ -57,20 +57,27 @@ function verifyAliasRecord(record) {
   if (!record || !record.signature || !record.publicKey) {
     return false;
   }
-  const payload = canonicalizeAliasRecord(record);
-  const publicKey = importPublicKey(record.publicKey);
-  return crypto.verify(
-    null,
-    payload,
-    publicKey,
-    Buffer.from(record.signature, "base64")
-  );
+  try {
+    const payload = canonicalizeAliasRecord(record);
+    const publicKey = importPublicKey(record.publicKey);
+    if (deriveAlias(publicKey) !== record.alias) {
+      return false;
+    }
+    return crypto.verify(
+      null,
+      payload,
+      publicKey,
+      Buffer.from(record.signature, "base64")
+    );
+  } catch (_error) {
+    return false;
+  }
 }
 
 function createAliasRecord(identity, options = {}) {
   const alias = options.alias || deriveAlias(identity.publicKey);
-  const ttlMs = options.ttlMs || DEFAULT_ALIAS_TTL_MS;
-  const expiresAt = options.expiresAt || Date.now() + ttlMs;
+  const ttlMs = options.ttlMs ?? DEFAULT_ALIAS_TTL_MS;
+  const expiresAt = options.expiresAt ?? Date.now() + ttlMs;
   const publicKey = exportPublicKey(identity.publicKey);
   const record = {
     alias,

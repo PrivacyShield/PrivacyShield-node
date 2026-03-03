@@ -205,11 +205,9 @@ class PrivacyShieldNode extends EventEmitter {
     }
 
     const targetCoordinates = this._resolveTargetCoordinates(packet.dstAlias);
-    const nextHops = this.routing.selectNextHops(
-      packet,
-      this.neighbors,
-      targetCoordinates
-    );
+    const nextHops = this.routing
+      .selectNextHops(packet, this.neighbors, targetCoordinates)
+      .filter((hop) => hop.alias !== fromAlias);
 
     if (!nextHops.length) {
       this.emit("drop", { packet, reason: "no_route" });
@@ -219,8 +217,13 @@ class PrivacyShieldNode extends EventEmitter {
     for (const hop of nextHops) {
       const shuffle = this.shufflePolicy.apply(packet.payload);
       const metadata = { ...packet.metadata };
+      const existingPadding = Number.isSafeInteger(metadata.paddingBytes)
+        ? metadata.paddingBytes
+        : 0;
       if (shuffle.paddingBytes) {
-        metadata.paddingBytes = shuffle.paddingBytes;
+        metadata.paddingBytes = existingPadding + shuffle.paddingBytes;
+      } else if (existingPadding) {
+        metadata.paddingBytes = existingPadding;
       }
 
       const outbound = {
@@ -268,23 +271,36 @@ class PrivacyShieldNode extends EventEmitter {
 
   _deliver(packet, fromAlias) {
     let payload = packet.payload;
+    const paddingBytes =
+      packet.metadata && Number.isSafeInteger(packet.metadata.paddingBytes)
+        ? packet.metadata.paddingBytes
+        : 0;
+    if (paddingBytes > 0) {
+      if (payload.length < paddingBytes) {
+        this.emit("drop", { packet, reason: "invalid_padding" });
+        return;
+      }
+      payload = payload.subarray(0, payload.length - paddingBytes);
+    }
     if (packet.encryption) {
       const key = this.getSessionKey(packet.srcAlias);
-      if (key) {
-        const iv = Buffer.from(packet.encryption.iv, "base64");
-        const tag = Buffer.from(packet.encryption.tag, "base64");
-        try {
-          payload = decryptPayload(
-            packet.payload,
-            key,
-            iv,
-            tag,
-            `${packet.srcAlias}->${packet.dstAlias}`
-          );
-        } catch (error) {
-          this.emit("drop", { packet, reason: "decrypt_failed", error });
-          return;
-        }
+      if (!key) {
+        this.emit("drop", { packet, reason: "missing_session_key" });
+        return;
+      }
+      const iv = Buffer.from(packet.encryption.iv, "base64");
+      const tag = Buffer.from(packet.encryption.tag, "base64");
+      try {
+        payload = decryptPayload(
+          payload,
+          key,
+          iv,
+          tag,
+          `${packet.srcAlias}->${packet.dstAlias}`
+        );
+      } catch (error) {
+        this.emit("drop", { packet, reason: "decrypt_failed", error });
+        return;
       }
     }
     if (packet.metadata && packet.metadata.control === "handshake") {
@@ -352,6 +368,14 @@ class PrivacyShieldNode extends EventEmitter {
     try {
       const message = JSON.parse(payload.toString("utf8"));
       if (message.type === "offer" && message.offer) {
+        if (
+          !fromAlias ||
+          !message.offer.aliasRecord ||
+          message.offer.aliasRecord.alias !== fromAlias
+        ) {
+          this.emit("drop", { reason: "handshake_alias_mismatch", fromAlias });
+          return;
+        }
         if (this.hasSessionKey(fromAlias)) {
           return;
         }
@@ -372,6 +396,14 @@ class PrivacyShieldNode extends EventEmitter {
         this.sendMessage(fromAlias, outbound, { ttl: 2, metadata: { control: "handshake" } });
         this.emit("session", { alias: fromAlias, role: "responder", key: sessionKey });
       } else if (message.type === "response" && message.response) {
+        if (
+          !fromAlias ||
+          !message.response.aliasRecord ||
+          message.response.aliasRecord.alias !== fromAlias
+        ) {
+          this.emit("drop", { reason: "handshake_alias_mismatch", fromAlias });
+          return;
+        }
         const pending = this.pendingHandshakes.get(fromAlias);
         if (!pending || pending.role !== "initiator") {
           return;

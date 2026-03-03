@@ -124,6 +124,18 @@ Some building blocks available in **libp2p/IPFS** ecosystems are valuable (DHTs,
 pnpm install
 ```
 
+### Run unit tests
+
+```bash
+npm test
+```
+
+Watch mode for rapid iteration:
+
+```bash
+npm run test:watch
+```
+
 ### Quick in-process demo (memory transport)
 
 ```js
@@ -196,3 +208,11 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/crypto.js`: AEAD helpers for payload protection
 - `src/handshake.js`: X25519 + Ed25519 session establishment utilities
 - `src/demo.js`: in-process helpers for local testing
+
+### Stability test harness (current)
+
+- `test/node.integration.test.js`: in-process network behavior (forwarding, handshake, encrypted messages, rotation, coordinate sample bounds)
+- `test/routing.test.js`: neighbor table and routing multipath/churn checks
+- `test/identity-dht.test.js`: alias record validation and DHT expiry behavior
+- `test/handshake-crypto.test.js`: handshake integrity and AEAD tamper resistance
+- `test/coordinates.test.js`: coordinate estimation, quantization, and distance invariants

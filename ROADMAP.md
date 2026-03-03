@@ -4,14 +4,22 @@ This roadmap captures near-term steps and the longer arc for the Node.js referen
 
 ## Next steps (near term)
 
-- Stabilize the core interfaces (transport, crypto, routing, DHT, shuffle) and document them.
-- Add a transport abstraction with a TCP or UDP adapter for real network IO.
-- Implement alias resolution flows (publish, lookup, rotation) with basic caching.
-- Add session handshakes (X25519 + Ed25519) and AEAD packet protection.
-- Expand routing to include multipath and controlled route churn.
-- Add coordinate sampling and stabilization hooks for latency-derived space.
-- Introduce region quantization helpers and region tables for long hops.
-- Add a small test harness for in-process networks and routing behaviors.
+Completed in the current prototype:
+
+- [x] Stabilize core interfaces (transport, crypto, routing, DHT, shuffle) and document them in `README.md`.
+- [x] Add transport abstraction with real network IO support via TCP adapter.
+- [x] Implement alias resolution flows (publish, lookup, rotation) with local caching.
+- [x] Add session handshakes (X25519 + Ed25519) and AEAD packet protection.
+- [x] Expand routing to include multipath selection and controlled route churn.
+- [x] Add coordinate sampling hooks for latency-derived coordinate updates.
+- [x] Introduce region quantization helpers and region tables for long hops.
+- [x] Add a stability-focused unit test harness for in-process networks and routing behaviors.
+
+Current next implementation focus:
+
+- [ ] Extend transport adapters beyond TCP (QUIC/WebRTC where practical).
+- [ ] Add bootstrap discovery and DHT replication strategies.
+- [ ] Add conformance vectors, fuzz-style tests, and adversarial routing simulations.
 
 ## General roadmap (phases)
 
