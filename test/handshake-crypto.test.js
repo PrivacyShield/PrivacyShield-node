@@ -12,6 +12,9 @@ const {
   createSymmetricKey,
   encryptPayload,
   decryptPayload,
+  splitSecretXor,
+  combineSecretXor,
+  deriveRekeySessionKey,
 } = require("../src/crypto");
 
 test("handshake roundtrip derives the same session key for both peers", () => {
@@ -65,3 +68,23 @@ test("aead payloads decrypt only with matching key and aad", () => {
   );
 });
 
+test("xor split shares reconstruct the original secret", () => {
+  const secret = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+  const shares = splitSecretXor(secret, 4);
+  assert.equal(shares.length, 4);
+
+  const combined = combineSecretXor(shares);
+  assert.equal(Buffer.compare(combined, secret), 0);
+});
+
+test("rekey key derivation changes with epoch and context", () => {
+  const base = createSymmetricKey();
+  const material = Buffer.alloc(32, 9);
+  const keyEpoch1 = deriveRekeySessionKey(base, material, "alice", "bob", 1);
+  const keyEpoch2 = deriveRekeySessionKey(base, material, "alice", "bob", 2);
+  const keyPeerSwap = deriveRekeySessionKey(base, material, "bob", "alice", 1);
+
+  assert.equal(Buffer.compare(keyEpoch1, keyEpoch2) === 0, false);
+  assert.equal(Buffer.compare(keyEpoch1, keyPeerSwap) === 0, false);
+  assert.equal(keyEpoch1.length, 32);
+});

@@ -21,13 +21,16 @@ Completed in the current prototype:
 - [x] Add TCP connection reuse and small write batching for long-lived traffic.
 - [x] Add concurrent dynamic routing controls with lane metadata and route-obfuscation jitter.
 - [x] Add CI performance gates with benchmark thresholds (`.github/workflows/performance-gate.yml`).
+- [x] Add transport-level cover traffic scheduling with bounded overhead controls and tests.
+- [x] Add split-share session rekey flow with route/lane jitter and encrypted noise packets.
+- [x] Add cover-traffic benchmark + CI perf gate thresholds (`scripts/bench-cover.js`).
 
 Current next implementation focus:
 
 - [ ] Extend transport adapters beyond TCP (QUIC/WebRTC where practical).
 - [ ] Add bootstrap discovery and DHT replication strategies.
-- [ ] Add transport-level cover traffic strategies and profile their overhead/benefit.
 - [ ] Add adaptive threshold calibration for perf gates across heterogeneous CI runners.
+- [ ] Harden rekey flow for concurrent bi-directional rotations under packet loss.
 - [ ] Add conformance vectors, fuzz-style tests, and adversarial routing simulations.
 
 ## General roadmap (phases)

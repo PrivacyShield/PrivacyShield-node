@@ -3,12 +3,12 @@
 
 ## Project and source code structure
 
-- `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT)
+- `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT, session rekey)
 - `src/identity.js`: keypairs, alias derivation, alias records
 - `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
 - `src/routing.js`: neighbor table + simple/dynamic concurrent routing engines
 - `src/transport/memory.js`: in-process transport for local demos/tests
-- `src/transport/tcp.js`: TCP adapter for real network IO
+- `src/transport/tcp.js`: TCP adapter for real network IO (pooling, batching, cover scheduler)
 - `src/transport/base.js`: minimal transport contract
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
@@ -20,6 +20,7 @@
 - `src/cli.js`: practical CLI (`identity:create`, `identity:show`, `server`, `client`)
 - `scripts/bench-routing.js`: routing next-hop benchmark runner
 - `scripts/bench-framing.js`: TCP framing benchmark runner
+- `scripts/bench-cover.js`: cover-traffic overhead benchmark runner
 - `scripts/perf-gate.js`: local benchmark threshold gate runner
 - `.github/workflows/performance-gate.yml`: CI job for tests + perf gate
 - `OPTIMIZATIONS.md`: performance strategy, benchmark snapshots, and tuning plan
@@ -34,18 +35,19 @@
 - `npm run node:client -- --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply]`: send a practical client message over TCP.
 - `npm run bench:routing -- --neighbors <n> --iterations <n> --max-paths <n>`: benchmark routing next-hop selection throughput.
 - `npm run bench:framing -- --iterations <n> --payload-bytes <n>`: benchmark TCP framing encode/decode cost and wire size.
+- `npm run bench:cover -- --messages <n> --payload-bytes <n> --max-cover-to-real-ratio <ratio>`: benchmark cover-traffic overhead and throughput retention.
 - `npm run perf:gate`: enforce benchmark thresholds and fail on regressions.
-- `npm run node:server -- --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n>`: run high-performance dynamic routing over pooled TCP connections.
-- `npm run node:client -- --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n>`: client-side equivalent tuning knobs.
+- `npm run node:server -- --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n> --cover-traffic true --max-cover-to-real-ratio <ratio> --rekey-interval-ms <ms> --rekey-share-count <n>`: run high-performance dynamic routing with cover traffic + key rotation.
+- `npm run node:client -- --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms> --lane-count <n> --cover-traffic true --max-cover-to-real-ratio <ratio> --rekey-interval-ms <ms> --rekey-share-count <n>`: client-side equivalent tuning knobs.
 
 ## Test structure
 
-- `test/node.integration.test.js`: in-process network behavior (message forwarding, handshake, encrypted payload flow, rotation, coordinate sample bounds)
+- `test/node.integration.test.js`: in-process network behavior (message forwarding, handshake, encrypted payload flow, split-route rekey, rotation, coordinate sample bounds)
 - `test/routing.test.js`: neighbor table and routing multipath/churn expectations
 - `test/identity-dht.test.js`: alias record validation + DHT acceptance/expiry behavior
-- `test/handshake-crypto.test.js`: handshake integrity and AEAD roundtrips/tamper rejection
+- `test/handshake-crypto.test.js`: handshake integrity, AEAD roundtrips/tamper rejection, split-key rekey primitives
 - `test/packet.test.js`: packet serialization/parsing compatibility and roundtrips
 - `test/coordinates.test.js`: coordinate estimation, quantization, and distance helper invariants
 - `test/identity-store.test.js`: filesystem identity persistence + integrity guards
-- `test/tcp.integration.test.js`: real TCP handshake/message integration with learned return routes and legacy frame compatibility
+- `test/tcp.integration.test.js`: real TCP handshake/message integration with learned return routes, legacy frame compatibility, and bounded cover scheduling
 - `test/helpers.js`: async event waiting helper shared by integration tests

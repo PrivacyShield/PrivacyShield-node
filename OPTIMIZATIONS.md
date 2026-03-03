@@ -61,11 +61,39 @@ This document tracks performance-focused implementation work, measurable baselin
   - `test/routing.test.js`
   - `test/node.integration.test.js`
 
+### 5. Transport-level cover traffic scheduling with bounded overhead
+
+- File: `src/transport/tcp.js`
+- Changes:
+  - Added periodic cover traffic scheduler (`coverTrafficEnabled`, `coverIntervalMs`, `coverRateBytesPerSec`, `coverBurstBytes`).
+  - Added bounded overhead controls (`maxCoverToRealRatio`, `coverWarmupFrames`, `coverPeerFanout`).
+  - Added lane-tagged randomized noise frame generation and cover-aware transport stats.
+- Effect:
+  - Sustains traffic-shape noise while keeping absolute and relative overhead bounded.
+  - Preserves connection reuse and batching behavior under mixed real/cover traffic.
+- Safety coverage:
+  - `test/tcp.integration.test.js` validates cover scheduling and ratio bounds.
+
+### 6. Split-share rekey over dynamic lanes with encrypted noise
+
+- Files: `src/node.js`, `src/crypto.js`
+- Changes:
+  - Added XOR split/combine primitives and deterministic rekey derivation (`deriveRekeySessionKey`).
+  - Added session rekey control messages (`rekey_share`, `rekey_ack`) with key fallback grace handling.
+  - Added share spread/jitter and encrypted cover-noise bursts during rekey (`rekeyNoisePackets`).
+- Effect:
+  - Frequent key churn with key material divided across multiple routed shares.
+  - Preserves payload confidentiality end-to-end while increasing route/timing uncertainty.
+- Safety coverage:
+  - `test/handshake-crypto.test.js`
+  - `test/node.integration.test.js`
+
 ## Benchmark commands
 
 ```bash
 npm run bench:routing -- --neighbors 5000 --iterations 20000 --max-paths 3
 npm run bench:framing -- --iterations 100000 --payload-bytes 1024
+npm run bench:cover -- --messages 300 --payload-bytes 256 --max-cover-to-real-ratio 0.5
 ```
 
 ## Benchmark snapshot (2026-03-03)
@@ -101,6 +129,24 @@ Environment: local developer machine, Node.js `v24.9.0`.
 }
 ```
 
+### Cover overhead and throughput retention
+
+```json
+{
+  "benchmark": "tcp-cover-overhead",
+  "messages": 300,
+  "payloadBytes": 256,
+  "baselineMessagesPerSec": 37792.5,
+  "coverMessagesPerSec": 35661.7,
+  "throughputRetention": 0.944,
+  "coverToRealRatio": 0.067,
+  "coverFramesSent": 20,
+  "realFramesSent": 300,
+  "coverBytesSent": 7000,
+  "realBytesSent": 183565
+}
+```
+
 ### Performance gate snapshot
 
 `npm run perf:gate` currently enforces:
@@ -109,6 +155,8 @@ Environment: local developer machine, Node.js `v24.9.0`.
 - `framing utf8FrameOpsPerSec >= 200000`
 - `framing speedup >= 1.1`
 - `framing wireReductionPercent >= 20`
+- `cover throughputRetention >= 0.6`
+- `cover coverToRealRatio <= 0.65`
 
 ## Practical tuning guidelines
 
@@ -124,9 +172,9 @@ Environment: local developer machine, Node.js `v24.9.0`.
 
 ## Next optimization targets
 
-1. Transport-level cover traffic scheduling with bounded overhead.
-2. Alias/DHT lookup caching policy tuning (positive + negative cache windows).
-3. Coordinated benchmark suite for in-memory vs TCP forwarding throughput.
+1. Alias/DHT lookup caching policy tuning (positive + negative cache windows).
+2. Coordinated benchmark suite for in-memory vs TCP forwarding throughput.
+3. Rekey hardening under packet loss and concurrent bi-direction rotations.
 4. Adversarial/perf simulations (packet loss, high-latency links, route churn pressure).
 
 ## Optimization acceptance gate

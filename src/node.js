@@ -11,7 +11,13 @@ const {
 const { MemoryDHTStore } = require("./dht");
 const { MemoryTransport } = require("./transport/memory");
 const { NoShufflePolicy } = require("./shuffle");
-const { encryptPayload, decryptPayload } = require("./crypto");
+const {
+  encryptPayload,
+  decryptPayload,
+  splitSecretXor,
+  combineSecretXor,
+  deriveRekeySessionKey,
+} = require("./crypto");
 const {
   createHandshakeOffer,
   acceptHandshakeOffer,
@@ -43,6 +49,32 @@ class PrivacyShieldNode extends EventEmitter {
     );
     this._routeSequence = 0;
     this.sessionKeys = new Map();
+    this.sessionFallbackKeys = new Map();
+    this.sessionEpochs = new Map();
+    this.pendingOutboundRekeys = new Map();
+    this.pendingInboundRekeys = new Map();
+    this.rekeyShareCount = Math.max(
+      2,
+      normalizePositiveInt(options.rekeyShareCount, 3)
+    );
+    this.rekeyGraceMs = normalizePositiveInt(options.rekeyGraceMs, 15_000);
+    this.rekeyIntervalMs = normalizePositiveInt(options.rekeyIntervalMs, 0);
+    this.rekeyIntervalJitterMs = normalizePositiveInt(
+      options.rekeyIntervalJitterMs,
+      1_000
+    );
+    this.rekeyShareSpreadMs = normalizePositiveInt(
+      options.rekeyShareSpreadMs,
+      8
+    );
+    this.rekeyNoisePackets = normalizePositiveInt(options.rekeyNoisePackets, 1);
+    this.rekeyNoiseBytes = Math.max(
+      16,
+      normalizePositiveInt(options.rekeyNoiseBytes, 48)
+    );
+    this.rekeyTtlJitter = normalizePositiveInt(options.rekeyTtlJitter, 1);
+    this._rekeyTimer = null;
+    this._rekeyCursor = 0;
     this.pendingHandshakes = new Map();
     this.aliasCache = new Map();
     this.coordinateSamples = [];
@@ -59,6 +91,7 @@ class PrivacyShieldNode extends EventEmitter {
     );
     this.started = true;
     this.publishAliasRecord();
+    this._scheduleRekeyLoop();
   }
 
   stop() {
@@ -66,6 +99,10 @@ class PrivacyShieldNode extends EventEmitter {
       return;
     }
     this.transport.stop();
+    if (this._rekeyTimer) {
+      clearTimeout(this._rekeyTimer);
+      this._rekeyTimer = null;
+    }
     this.started = false;
   }
 
@@ -129,6 +166,7 @@ class PrivacyShieldNode extends EventEmitter {
       throw new Error("Session key must be a Buffer");
     }
     this.sessionKeys.set(alias, key);
+    this.sessionFallbackKeys.delete(alias);
   }
 
   getSessionKey(alias) {
@@ -136,7 +174,8 @@ class PrivacyShieldNode extends EventEmitter {
   }
 
   hasSessionKey(alias) {
-    return this.sessionKeys.has(alias);
+    this._pruneExpiredFallbackKeys();
+    return this.sessionKeys.has(alias) || this.sessionFallbackKeys.has(alias);
   }
 
   resolveAlias(alias, options = {}) {
@@ -168,6 +207,10 @@ class PrivacyShieldNode extends EventEmitter {
       this.transport.alias = this.alias;
     }
     this.sessionKeys.clear();
+    this.sessionFallbackKeys.clear();
+    this.sessionEpochs.clear();
+    this.pendingOutboundRekeys.clear();
+    this.pendingInboundRekeys.clear();
     this.pendingHandshakes.clear();
     this.publishAliasRecord({ coordinates: options.coordinates || this.coordinates });
     if (wasStarted) {
@@ -293,6 +336,11 @@ class PrivacyShieldNode extends EventEmitter {
   }
 
   _deliver(packet, fromAlias) {
+    if (packet.metadata && packet.metadata.cover === true) {
+      this.emit("cover", { packet, fromAlias });
+      return;
+    }
+
     let payload = packet.payload;
     const paddingBytes =
       packet.metadata && Number.isSafeInteger(packet.metadata.paddingBytes)
@@ -306,17 +354,17 @@ class PrivacyShieldNode extends EventEmitter {
       payload = payload.subarray(0, payload.length - paddingBytes);
     }
     if (packet.encryption) {
-      const key = this.getSessionKey(packet.srcAlias);
-      if (!key) {
+      const keys = this._getDecryptionKeys(packet.srcAlias);
+      if (!keys.length) {
         this.emit("drop", { packet, reason: "missing_session_key" });
         return;
       }
       const iv = Buffer.from(packet.encryption.iv, "base64");
       const tag = Buffer.from(packet.encryption.tag, "base64");
       try {
-        payload = decryptPayload(
+        payload = this._tryDecryptWithSessionKeys(
           payload,
-          key,
+          keys,
           iv,
           tag,
           `${packet.srcAlias}->${packet.dstAlias}`
@@ -328,6 +376,10 @@ class PrivacyShieldNode extends EventEmitter {
     }
     if (packet.metadata && packet.metadata.control === "handshake") {
       this._handleHandshakeMessage(packet, fromAlias, payload);
+      return;
+    }
+    if (packet.metadata && packet.metadata.control === "session") {
+      this._handleSessionControlMessage(packet, fromAlias, payload);
       return;
     }
     this.emit("message", { packet, fromAlias, payload });
@@ -354,6 +406,201 @@ class PrivacyShieldNode extends EventEmitter {
       record,
       expiresAt: record.expiresAt,
     });
+  }
+
+  _getDecryptionKeys(alias) {
+    this._pruneExpiredFallbackKeys();
+    const keys = [];
+    const current = this.sessionKeys.get(alias);
+    if (current) {
+      keys.push(current);
+    }
+    const fallback = this.sessionFallbackKeys.get(alias);
+    if (fallback && fallback.key) {
+      keys.push(fallback.key);
+    }
+    return keys;
+  }
+
+  _tryDecryptWithSessionKeys(payload, keys, iv, tag, aad) {
+    let lastError = null;
+    for (const key of keys) {
+      try {
+        return decryptPayload(payload, key, iv, tag, aad);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("Unable to decrypt with available session keys");
+  }
+
+  _promoteSessionKey(alias, nextKey, options = {}) {
+    const current = this.sessionKeys.get(alias);
+    if (current) {
+      const graceMs = normalizePositiveInt(options.graceMs, this.rekeyGraceMs);
+      this.sessionFallbackKeys.set(alias, {
+        key: current,
+        expiresAt: Date.now() + graceMs,
+      });
+    }
+    this.sessionKeys.set(alias, nextKey);
+  }
+
+  _pruneExpiredFallbackKeys() {
+    const now = Date.now();
+    for (const [alias, fallback] of this.sessionFallbackKeys.entries()) {
+      if (!fallback || fallback.expiresAt <= now) {
+        this.sessionFallbackKeys.delete(alias);
+      }
+    }
+  }
+
+  initiateSessionRekey(dstAlias, options = {}) {
+    const currentKey = this.sessionKeys.get(dstAlias);
+    if (!currentKey) {
+      return null;
+    }
+
+    this._pruneStaleRekeys();
+    const pendingByAlias =
+      this.pendingOutboundRekeys.get(dstAlias) || new Map();
+    if (pendingByAlias.size >= 1) {
+      return null;
+    }
+
+    const shareCount = Math.max(
+      2,
+      normalizePositiveInt(options.shareCount, this.rekeyShareCount)
+    );
+    const material = crypto.randomBytes(32);
+    const shares = splitSecretXor(material, shareCount);
+    const epoch = this._nextSessionEpoch(dstAlias);
+    const rekeyId = crypto.randomBytes(8).toString("hex");
+    pendingByAlias.set(rekeyId, {
+      rekeyId,
+      epoch,
+      material,
+      baseKey: currentKey,
+      createdAt: Date.now(),
+      totalShares: shareCount,
+    });
+    this.pendingOutboundRekeys.set(dstAlias, pendingByAlias);
+
+    const baseTtl = Math.max(1, normalizePositiveInt(options.ttl, 3));
+    for (let i = 0; i < shares.length; i += 1) {
+      const message = {
+        type: "rekey_share",
+        version: 1,
+        rekeyId,
+        epoch,
+        totalShares: shareCount,
+        index: i,
+        share: shares[i].toString("base64"),
+      };
+      this._dispatchRekeyShare(dstAlias, message, {
+        baseTtl,
+        shareCount,
+      });
+    }
+    this._emitRekeyNoise(dstAlias, { baseTtl });
+    return {
+      rekeyId,
+      epoch,
+      totalShares: shareCount,
+      noisePackets: this.rekeyNoisePackets,
+    };
+  }
+
+  _dispatchRekeyShare(dstAlias, message, options = {}) {
+    const ttl = this._withRekeyTtlJitter(options.baseTtl || 3);
+    const spreadWindowMs = Math.max(
+      0,
+      normalizePositiveInt(this.rekeyShareSpreadMs, 0)
+    );
+    const delayMs =
+      spreadWindowMs > 0
+        ? crypto.randomInt(0, spreadWindowMs * Math.max(1, options.shareCount || 1) + 1)
+        : 0;
+    const payload = Buffer.from(JSON.stringify(message));
+    const metadata = {
+      control: "session",
+      rekey: true,
+      routeLane: this._selectRekeyRouteLane(message.index),
+      rekeyId: message.rekeyId,
+      rekeyShareIndex: message.index,
+      routeEntropy: crypto.randomBytes(2).toString("hex"),
+    };
+
+    const dispatch = () => {
+      try {
+        this.sendMessage(dstAlias, payload, {
+          encrypt: true,
+          ttl,
+          metadata,
+        });
+      } catch (_error) {
+        // best-effort share dispatch
+      }
+    };
+
+    if (delayMs > 0) {
+      setTimeout(dispatch, delayMs);
+      return;
+    }
+    dispatch();
+  }
+
+  _emitRekeyNoise(dstAlias, options = {}) {
+    if (this.rekeyNoisePackets <= 0) {
+      return;
+    }
+    const baseTtl = Math.max(1, normalizePositiveInt(options.baseTtl, 2));
+    const burstWindowMs = Math.max(0, this.rekeyShareSpreadMs);
+    for (let i = 0; i < this.rekeyNoisePackets; i += 1) {
+      const payload = crypto.randomBytes(this.rekeyNoiseBytes);
+      const ttl = this._withRekeyTtlJitter(baseTtl);
+      const metadata = {
+        cover: true,
+        control: "session",
+        rekeyNoise: true,
+        routeLane: this._selectRekeyRouteLane(i),
+        routeEntropy: crypto.randomBytes(2).toString("hex"),
+      };
+      const sendNoise = () => {
+        try {
+          this.sendMessage(dstAlias, payload, {
+            encrypt: true,
+            ttl,
+            metadata,
+          });
+        } catch (_error) {
+          // best-effort noise injection
+        }
+      };
+      if (burstWindowMs > 0) {
+        setTimeout(sendNoise, crypto.randomInt(0, burstWindowMs + 1));
+      } else {
+        sendNoise();
+      }
+    }
+  }
+
+  _selectRekeyRouteLane(seed = 0) {
+    if (this.routeLaneCount <= 1) {
+      return 0;
+    }
+    return (seed + crypto.randomInt(0, this.routeLaneCount)) % this.routeLaneCount;
+  }
+
+  _withRekeyTtlJitter(baseTtl) {
+    const normalizedBase = Math.max(1, normalizePositiveInt(baseTtl, 3));
+    if (this.rekeyTtlJitter <= 0) {
+      return Math.min(this.maxTtl, normalizedBase);
+    }
+    return Math.min(
+      this.maxTtl,
+      normalizedBase + crypto.randomInt(0, this.rekeyTtlJitter + 1)
+    );
   }
 
   _nextRouteGroupId(packet) {
@@ -512,6 +759,271 @@ class PrivacyShieldNode extends EventEmitter {
     } catch (error) {
       this.emit("drop", { reason: "handshake_error", fromAlias, error });
     }
+  }
+
+  _handleSessionControlMessage(_packet, fromAlias, payload) {
+    try {
+      const message = JSON.parse(payload.toString("utf8"));
+      if (!fromAlias || !message || !message.type) {
+        return;
+      }
+      if (message.type === "rekey_share") {
+        this._handleRekeyShare(fromAlias, message);
+        return;
+      }
+      if (message.type === "rekey_ack") {
+        this._handleRekeyAck(fromAlias, message);
+      }
+    } catch (error) {
+      this.emit("drop", { reason: "session_control_error", fromAlias, error });
+    }
+  }
+
+  _handleRekeyShare(fromAlias, message) {
+    const {
+      rekeyId,
+      epoch,
+      totalShares,
+      index,
+      share,
+    } = message;
+    if (
+      typeof rekeyId !== "string" ||
+      !Number.isInteger(epoch) ||
+      !Number.isInteger(totalShares) ||
+      !Number.isInteger(index) ||
+      totalShares < 2 ||
+      totalShares > 16 ||
+      index < 0 ||
+      index >= totalShares ||
+      typeof share !== "string"
+    ) {
+      return;
+    }
+
+    const currentEpoch = this.sessionEpochs.get(fromAlias) || 0;
+    if (epoch <= currentEpoch) {
+      return;
+    }
+    const baseKey =
+      this.sessionKeys.get(fromAlias) ||
+      (this.sessionFallbackKeys.get(fromAlias) || {}).key;
+    if (!baseKey) {
+      return;
+    }
+    const shareBuffer = Buffer.from(share, "base64");
+    if (!shareBuffer.length || shareBuffer.length > 1024) {
+      return;
+    }
+    const inboundByAlias =
+      this.pendingInboundRekeys.get(fromAlias) || new Map();
+    let pending = inboundByAlias.get(rekeyId);
+    if (!pending) {
+      pending = {
+        rekeyId,
+        epoch,
+        totalShares,
+        baseKey,
+        shareBytes: shareBuffer.length,
+        shares: new Map(),
+        createdAt: Date.now(),
+      };
+      inboundByAlias.set(rekeyId, pending);
+      this.pendingInboundRekeys.set(fromAlias, inboundByAlias);
+    }
+    if (pending.epoch !== epoch || pending.totalShares !== totalShares) {
+      return;
+    }
+    if (pending.shareBytes !== shareBuffer.length) {
+      return;
+    }
+    if (!pending.shares.has(index)) {
+      pending.shares.set(index, shareBuffer);
+    }
+    if (pending.shares.size < totalShares) {
+      return;
+    }
+
+    const orderedShares = [];
+    for (let i = 0; i < totalShares; i += 1) {
+      const part = pending.shares.get(i);
+      if (!part) {
+        return;
+      }
+      orderedShares.push(part);
+    }
+    let nextKey = null;
+    try {
+      const material = combineSecretXor(orderedShares);
+      nextKey = deriveRekeySessionKey(
+        pending.baseKey,
+        material,
+        fromAlias,
+        this.alias,
+        epoch
+      );
+    } catch (_error) {
+      inboundByAlias.delete(rekeyId);
+      return;
+    }
+    this._ackSessionRekey(fromAlias, rekeyId, epoch, pending.baseKey);
+    this._promoteSessionKey(fromAlias, nextKey, { graceMs: this.rekeyGraceMs });
+    this.sessionEpochs.set(fromAlias, epoch);
+    inboundByAlias.delete(rekeyId);
+    if (!inboundByAlias.size) {
+      this.pendingInboundRekeys.delete(fromAlias);
+    }
+    this.emit("session_rekey", { alias: fromAlias, role: "responder", epoch });
+  }
+
+  _handleRekeyAck(fromAlias, message) {
+    const { rekeyId, epoch } = message;
+    if (
+      typeof rekeyId !== "string" ||
+      !Number.isInteger(epoch)
+    ) {
+      return;
+    }
+    const currentEpoch = this.sessionEpochs.get(fromAlias) || 0;
+    if (epoch <= currentEpoch) {
+      return;
+    }
+    const pendingByAlias = this.pendingOutboundRekeys.get(fromAlias);
+    if (!pendingByAlias) {
+      return;
+    }
+    const pending = pendingByAlias.get(rekeyId);
+    if (!pending || pending.epoch !== epoch) {
+      return;
+    }
+
+    const nextKey = deriveRekeySessionKey(
+      pending.baseKey,
+      pending.material,
+      this.alias,
+      fromAlias,
+      pending.epoch
+    );
+    this._promoteSessionKey(fromAlias, nextKey, { graceMs: this.rekeyGraceMs });
+    this.sessionEpochs.set(fromAlias, pending.epoch);
+    pendingByAlias.delete(rekeyId);
+    if (!pendingByAlias.size) {
+      this.pendingOutboundRekeys.delete(fromAlias);
+    }
+    this.emit("session_rekey", {
+      alias: fromAlias,
+      role: "initiator",
+      epoch: pending.epoch,
+    });
+  }
+
+  _ackSessionRekey(alias, rekeyId, epoch, keyOverride = null) {
+    const message = {
+      type: "rekey_ack",
+      version: 1,
+      rekeyId,
+      epoch,
+    };
+    const payload = Buffer.from(JSON.stringify(message));
+    const metadata = {
+      control: "session",
+      rekey: true,
+    };
+    if (!keyOverride) {
+      this.sendMessage(alias, payload, {
+        encrypt: true,
+        ttl: 2,
+        metadata,
+      });
+      return;
+    }
+    this._sendEncryptedControlPacket(alias, payload, keyOverride, metadata, 2);
+  }
+
+  _sendEncryptedControlPacket(dstAlias, payload, key, metadata, ttl) {
+    const packet = createPacket({
+      srcAlias: this.alias,
+      dstAlias,
+      payload,
+      ttl,
+      metadata,
+    });
+    const encrypted = encryptPayload(
+      packet.payload,
+      key,
+      `${packet.srcAlias}->${packet.dstAlias}`
+    );
+    packet.payload = encrypted.ciphertext;
+    packet.encryption = {
+      alg: encrypted.algorithm,
+      iv: encrypted.iv.toString("base64"),
+      tag: encrypted.tag.toString("base64"),
+    };
+    return this.forwardPacket(packet);
+  }
+
+  _nextSessionEpoch(alias) {
+    return (this.sessionEpochs.get(alias) || 0) + 1;
+  }
+
+  _scheduleRekeyLoop() {
+    if (!this.started || this.rekeyIntervalMs <= 0) {
+      return;
+    }
+    if (this._rekeyTimer) {
+      clearTimeout(this._rekeyTimer);
+      this._rekeyTimer = null;
+    }
+    const jitter = this.rekeyIntervalJitterMs
+      ? crypto.randomInt(0, this.rekeyIntervalJitterMs + 1)
+      : 0;
+    this._rekeyTimer = setTimeout(() => {
+      this._rekeyTimer = null;
+      this._runRekeyTick();
+      this._scheduleRekeyLoop();
+    }, this.rekeyIntervalMs + jitter);
+  }
+
+  _runRekeyTick() {
+    this._pruneStaleRekeys();
+    const aliases = Array.from(this.sessionKeys.keys());
+    if (!aliases.length) {
+      return;
+    }
+    this._rekeyCursor = this._rekeyCursor % aliases.length;
+    const alias = aliases[this._rekeyCursor];
+    this._rekeyCursor = (this._rekeyCursor + 1) % aliases.length;
+    try {
+      this.initiateSessionRekey(alias, { shareCount: this.rekeyShareCount });
+    } catch (_error) {
+      // best-effort background key rotation
+    }
+  }
+
+  _pruneStaleRekeys() {
+    const maxAgeMs = Math.max(this.rekeyGraceMs * 4, 30_000);
+    const now = Date.now();
+    for (const [alias, pendingByAlias] of this.pendingOutboundRekeys.entries()) {
+      for (const [rekeyId, pending] of pendingByAlias.entries()) {
+        if (!pending || now - pending.createdAt > maxAgeMs) {
+          pendingByAlias.delete(rekeyId);
+        }
+      }
+      if (!pendingByAlias.size) {
+        this.pendingOutboundRekeys.delete(alias);
+      }
+    }
+    for (const [alias, pendingByAlias] of this.pendingInboundRekeys.entries()) {
+      for (const [rekeyId, pending] of pendingByAlias.entries()) {
+        if (!pending || now - pending.createdAt > maxAgeMs) {
+          pendingByAlias.delete(rekeyId);
+        }
+      }
+      if (!pendingByAlias.size) {
+        this.pendingInboundRekeys.delete(alias);
+      }
+    }
+    this._pruneExpiredFallbackKeys();
   }
 }
 

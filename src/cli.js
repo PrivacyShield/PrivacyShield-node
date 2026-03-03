@@ -38,8 +38,14 @@ PrivacyShield practical CLI
 Commands:
   identity:create --identity <path>
   identity:show --identity <path>
-  server --identity <path> [--host 127.0.0.1] [--port 4001] [--echo] [--dynamic-routing true]
-  client --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply] [--dynamic-routing true]
+  server --identity <path> [--host 127.0.0.1] [--port 4001] [--echo] [routing/transport/rekey flags]
+  client --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply] [routing/transport/rekey flags]
+
+Key tuning flags:
+  Routing: --dynamic-routing true --min-paths <n> --max-paths <n> --route-obfuscation-delay-ms <ms> --route-obfuscation-noise <float>
+  Transport: --lane-count <n> --batch-window-ms <ms> --batch-max-frames <n> --flush-jitter-ms <ms>
+  Cover: --cover-traffic true --cover-interval-ms <ms> --cover-rate-bps <n> --max-cover-to-real-ratio <ratio>
+  Rekey: --rekey-interval-ms <ms> --rekey-share-count <n> --rekey-noise-packets <n> --rekey-grace-ms <ms>
 `);
 }
 
@@ -115,6 +121,16 @@ function buildTransportOptions(args, alias, host, port) {
     batchMaxBytes: parsePositiveInt(args["batch-max-bytes"], 64 * 1024),
     flushJitterMs: parsePositiveInt(args["flush-jitter-ms"], 1),
     socketIdleTimeoutMs: parsePositiveInt(args["socket-idle-timeout-ms"], 30_000),
+    coverTrafficEnabled: parseBool(args["cover-traffic"], false),
+    coverIntervalMs: parsePositiveInt(args["cover-interval-ms"], 45),
+    coverJitterMs: parsePositiveInt(args["cover-jitter-ms"], 12),
+    coverRateBytesPerSec: parsePositiveInt(args["cover-rate-bps"], 8 * 1024),
+    coverBurstBytes: parsePositiveInt(args["cover-burst-bytes"], 96 * 12),
+    coverPacketBytes: parsePositiveInt(args["cover-packet-bytes"], 96),
+    coverPeerFanout: Math.max(1, parsePositiveInt(args["cover-peer-fanout"], 2)),
+    coverTtl: Math.max(1, parsePositiveInt(args["cover-ttl"], 2)),
+    coverWarmupFrames: parsePositiveInt(args["cover-warmup-frames"], 4),
+    maxCoverToRealRatio: parseFloatValue(args["max-cover-to-real-ratio"], 0.5),
   };
 }
 
@@ -134,6 +150,14 @@ function buildNodeOptions(args, identity, transport) {
     transport,
     routeLaneCount: laneCount,
     routeObfuscationDelayMs,
+    rekeyShareCount: Math.max(2, parsePositiveInt(args["rekey-share-count"], 3)),
+    rekeyShareSpreadMs: parsePositiveInt(args["rekey-share-spread-ms"], 8),
+    rekeyNoisePackets: parsePositiveInt(args["rekey-noise-packets"], 1),
+    rekeyNoiseBytes: Math.max(16, parsePositiveInt(args["rekey-noise-bytes"], 48)),
+    rekeyIntervalMs: parsePositiveInt(args["rekey-interval-ms"], 0),
+    rekeyIntervalJitterMs: parsePositiveInt(args["rekey-interval-jitter-ms"], 1_000),
+    rekeyGraceMs: parsePositiveInt(args["rekey-grace-ms"], 15_000),
+    rekeyTtlJitter: parsePositiveInt(args["rekey-ttl-jitter"], 1),
   };
   if (dynamicRouting) {
     options.dynamicRouting = {

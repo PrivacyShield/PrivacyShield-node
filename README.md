@@ -141,6 +141,7 @@ npm run test:watch
 ```bash
 npm run bench:routing -- --neighbors 5000 --iterations 20000 --max-paths 3
 npm run bench:framing -- --iterations 100000 --payload-bytes 1024
+npm run bench:cover -- --messages 300 --payload-bytes 256 --max-cover-to-real-ratio 0.5
 ```
 
 Performance strategy, benchmark snapshots, and tuning guidance live in `OPTIMIZATIONS.md`.
@@ -198,8 +199,18 @@ npm run node:server -- \
   --batch-window-ms 2 \
   --batch-max-frames 24 \
   --flush-jitter-ms 1 \
-  --lane-count 4
+  --lane-count 4 \
+  --cover-traffic true \
+  --cover-interval-ms 45 \
+  --max-cover-to-real-ratio 0.5 \
+  --rekey-interval-ms 45000 \
+  --rekey-share-count 4
 ```
+
+Advanced privacy/performance knobs now available on both `server` and `client` commands:
+
+- Cover traffic: `--cover-traffic`, `--cover-interval-ms`, `--cover-rate-bps`, `--cover-burst-bytes`, `--cover-packet-bytes`, `--max-cover-to-real-ratio`, `--cover-warmup-frames`
+- Rekey cadence/noise: `--rekey-interval-ms`, `--rekey-interval-jitter-ms`, `--rekey-share-count`, `--rekey-share-spread-ms`, `--rekey-noise-packets`, `--rekey-noise-bytes`, `--rekey-grace-ms`, `--rekey-ttl-jitter`
 
 ### Quick in-process demo (memory transport)
 
@@ -261,12 +272,12 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 
 ### Prototype layout (current)
 
-- `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT)
+- `src/node.js`: PrivacyShield node orchestrator (routing, transport, DHT, session rekey)
 - `src/identity.js`: keypairs, alias derivation, alias records
 - `src/coordinates.js`: latency-based coordinate estimation + quantization helpers
 - `src/routing.js`: neighbor table + simple/dynamic concurrent routing engines
 - `src/transport/memory.js`: in-process transport for local demos/tests
-- `src/transport/tcp.js`: TCP adapter for basic real network IO (newline-framed)
+- `src/transport/tcp.js`: TCP adapter for real network IO (newline-framed, pooling, batching, cover scheduler)
 - `src/transport/base.js`: minimal transport contract
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
@@ -278,16 +289,17 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/cli.js`: practical CLI for identity management and TCP server/client workflows
 - `scripts/bench-routing.js`: routing selection benchmark helper
 - `scripts/bench-framing.js`: TCP framing benchmark helper
+- `scripts/bench-cover.js`: cover-traffic overhead benchmark helper
 - `scripts/perf-gate.js`: benchmark threshold gate used locally and in CI
 - `.github/workflows/performance-gate.yml`: CI workflow for tests + perf regression checks
 
 ### Stability test harness (current)
 
-- `test/node.integration.test.js`: in-process network behavior (forwarding, handshake, encrypted messages, rotation, coordinate sample bounds)
+- `test/node.integration.test.js`: in-process network behavior (forwarding, handshake, encrypted messages, split-route rekey, rotation, coordinate sample bounds)
 - `test/routing.test.js`: neighbor table and routing multipath/churn checks
 - `test/identity-dht.test.js`: alias record validation and DHT expiry behavior
-- `test/handshake-crypto.test.js`: handshake integrity and AEAD tamper resistance
+- `test/handshake-crypto.test.js`: handshake integrity, AEAD tamper resistance, and split-key rekey primitive checks
 - `test/packet.test.js`: packet wire serialization/parsing compatibility
 - `test/coordinates.test.js`: coordinate estimation, quantization, and distance invariants
 - `test/identity-store.test.js`: filesystem identity persistence and integrity checks
-- `test/tcp.integration.test.js`: real TCP handshake and encrypted message flow with learned return routes
+- `test/tcp.integration.test.js`: real TCP handshake and encrypted message flow with learned return routes plus bounded cover scheduling

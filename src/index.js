@@ -36,6 +36,9 @@ const {
   createSymmetricKey,
   encryptPayload,
   decryptPayload,
+  splitSecretXor,
+  combineSecretXor,
+  deriveRekeySessionKey,
 } = require("./crypto");
 const {
   createHandshakeOffer,
@@ -81,6 +84,9 @@ module.exports = {
   createSymmetricKey,
   encryptPayload,
   decryptPayload,
+  splitSecretXor,
+  combineSecretXor,
+  deriveRekeySessionKey,
   createHandshakeOffer,
   acceptHandshakeOffer,
   finalizeHandshake,

@@ -94,6 +94,83 @@ test("handshake and encrypted messages work with padded shuffle payloads", async
   }
 });
 
+test("split-route session rekey rotates keys and keeps encrypted delivery stable", async () => {
+  const dht = new MemoryDHTStore();
+  const nodeA = new PrivacyShieldNode({
+    dht,
+    dynamicRouting: { minPaths: 1, maxPaths: 3, dynamicPathSpread: true, obfuscationNoise: 0.1 },
+    routeLaneCount: 6,
+    routeObfuscationDelayMs: 0,
+    rekeyShareCount: 4,
+    rekeyShareSpreadMs: 2,
+    rekeyNoisePackets: 2,
+    rekeyNoiseBytes: 48,
+  });
+  const nodeB = new PrivacyShieldNode({
+    dht,
+    dynamicRouting: { minPaths: 1, maxPaths: 3, dynamicPathSpread: true, obfuscationNoise: 0.1 },
+    routeLaneCount: 6,
+    routeObfuscationDelayMs: 0,
+    rekeyShareCount: 4,
+    rekeyShareSpreadMs: 2,
+    rekeyNoisePackets: 1,
+    rekeyNoiseBytes: 48,
+  });
+  linkPeers(nodeA, nodeB);
+
+  nodeA.start();
+  nodeB.start();
+
+  try {
+    const sessionA = waitForEvent(nodeA, "session", {
+      predicate: (event) => event.alias === nodeB.alias,
+    });
+    const sessionB = waitForEvent(nodeB, "session", {
+      predicate: (event) => event.alias === nodeA.alias,
+    });
+    nodeA.initiateSessionHandshake(nodeB.alias);
+    await Promise.all([sessionA, sessionB]);
+
+    const keyBefore = Buffer.from(nodeA.getSessionKey(nodeB.alias));
+    const rekeyA = waitForEvent(nodeA, "session_rekey", {
+      timeoutMs: 3_000,
+      predicate: (event) => event.alias === nodeB.alias && event.role === "initiator",
+    });
+    const rekeyB = waitForEvent(nodeB, "session_rekey", {
+      timeoutMs: 3_000,
+      predicate: (event) => event.alias === nodeA.alias && event.role === "responder",
+    });
+    const coverSeen = waitForEvent(nodeB, "cover", { timeoutMs: 3_000 });
+
+    const initiated = nodeA.initiateSessionRekey(nodeB.alias, { shareCount: 4, ttl: 3 });
+    assert.equal(!!initiated, true);
+
+    await Promise.all([rekeyA, rekeyB, coverSeen]);
+
+    const keyAfterA = nodeA.getSessionKey(nodeB.alias);
+    const keyAfterB = nodeB.getSessionKey(nodeA.alias);
+    assert.equal(Buffer.compare(keyAfterA, keyAfterB), 0);
+    assert.equal(Buffer.compare(keyBefore, keyAfterA) === 0, false);
+
+    const inboundB = waitForEvent(nodeB, "message", {
+      predicate: (event) => event.fromAlias === nodeA.alias,
+    });
+    nodeA.sendMessage(nodeB.alias, Buffer.from("rekeyed-a2b"), { encrypt: true });
+    const fromA = await inboundB;
+    assert.equal(fromA.payload.toString("utf8"), "rekeyed-a2b");
+
+    const inboundA = waitForEvent(nodeA, "message", {
+      predicate: (event) => event.fromAlias === nodeB.alias,
+    });
+    nodeB.sendMessage(nodeA.alias, Buffer.from("rekeyed-b2a"), { encrypt: true });
+    const fromB = await inboundA;
+    assert.equal(fromB.payload.toString("utf8"), "rekeyed-b2a");
+  } finally {
+    nodeA.stop();
+    nodeB.stop();
+  }
+});
+
 test("encrypted packets are dropped when the receiver has no session key", async () => {
   const dht = new MemoryDHTStore();
   const nodeA = new PrivacyShieldNode({ dht });

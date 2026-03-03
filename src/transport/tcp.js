@@ -1,6 +1,11 @@
 const crypto = require("crypto");
 const net = require("net");
-const { serializePacket, parsePacketString, decodePacket } = require("../packet");
+const {
+  createPacket,
+  serializePacket,
+  parsePacketString,
+  decodePacket,
+} = require("../packet");
 
 class TcpTransport {
   constructor(options = {}) {
@@ -18,12 +23,38 @@ class TcpTransport {
     this.flushJitterMs = normalizeInt(options.flushJitterMs, 0);
     this.socketIdleTimeoutMs = normalizeInt(options.socketIdleTimeoutMs, 30_000);
     this.laneCount = Math.max(1, normalizeInt(options.laneCount, 4));
+
+    this.coverTrafficEnabled = options.coverTrafficEnabled === true;
+    this.coverIntervalMs = Math.max(5, normalizeInt(options.coverIntervalMs, 45));
+    this.coverJitterMs = normalizeInt(options.coverJitterMs, 12);
+    this.coverRateBytesPerSec = normalizeInt(options.coverRateBytesPerSec, 8 * 1024);
+    this.coverPacketBytes = Math.max(32, normalizeInt(options.coverPacketBytes, 96));
+    this.coverBurstBytes = Math.max(
+      this.coverPacketBytes,
+      normalizeInt(options.coverBurstBytes, this.coverPacketBytes * 12)
+    );
+    this.coverPeerFanout = Math.max(1, normalizeInt(options.coverPeerFanout, 2));
+    this.coverTtl = Math.max(1, normalizeInt(options.coverTtl, 2));
+    this.maxCoverToRealRatio = normalizeRatio(options.maxCoverToRealRatio, 0.5);
+    this.coverWarmupFrames = normalizeInt(options.coverWarmupFrames, 4);
+
     this.connectionPool = new Map();
+    this._coverTimer = null;
+    this._coverTokens = this.coverBurstBytes;
+    this._coverLastRefillAt = Date.now();
+    this._coverPeerCursor = 0;
     this.stats = {
       connectionsCreated: 0,
       batchesSent: 0,
       framesSent: 0,
       framesQueued: 0,
+      realFramesSent: 0,
+      coverFramesSent: 0,
+      realBytesSent: 0,
+      coverBytesSent: 0,
+      realFramesQueued: 0,
+      coverFramesQueued: 0,
+      coverFramesDropped: 0,
       writesFailed: 0,
       reconnects: 0,
     };
@@ -40,6 +71,7 @@ class TcpTransport {
     this.server = net.createServer((socket) => this._bindSocket(socket));
     this.server.listen(this.port, this.host);
     this.started = true;
+    this._scheduleCoverTick();
   }
 
   stop() {
@@ -49,6 +81,7 @@ class TcpTransport {
     if (this.server) {
       this.server.close();
     }
+    this._clearCoverTimer();
     for (const state of this.connectionPool.values()) {
       this._closeSocket(state);
     }
@@ -61,6 +94,7 @@ class TcpTransport {
       throw new Error("registerPeer requires { host, port }");
     }
     this.peers.set(alias, { host: address.host, port: address.port });
+    this._scheduleCoverTick();
   }
 
   getAddress() {
@@ -72,34 +106,7 @@ class TcpTransport {
   }
 
   send(packet, destinationAlias, addressHint = null) {
-    if (!this.started) {
-      return false;
-    }
-    const address =
-      addressHint ||
-      this.peers.get(destinationAlias) ||
-      this.onResolveAddress(destinationAlias);
-    if (!address) {
-      return false;
-    }
-
-    const localAddress = this.getAddress();
-    const metadata = { ...(packet.metadata || {}) };
-    if (
-      !metadata.replyAddress &&
-      localAddress &&
-      localAddress.host &&
-      localAddress.port
-    ) {
-      metadata.replyAddress = localAddress;
-    }
-    const outbound = { ...packet, metadata };
-
-    const lane = resolveLaneId(outbound.metadata, this.laneCount);
-    const wire = `${serializePacket(outbound)}\n`;
-    const state = this._getOrCreateConnectionState(address);
-    this._enqueueFrame(state, wire, lane);
-    return true;
+    return this._queuePacket(packet, destinationAlias, addressHint).ok;
   }
 
   getStats() {
@@ -119,7 +126,43 @@ class TcpTransport {
       openConnections,
       queuedFrames,
       queuedBytes,
+      coverTokenBytes: Number(this._coverTokens.toFixed(1)),
     };
+  }
+
+  _queuePacket(packet, destinationAlias, addressHint = null) {
+    if (!this.started || !packet || !destinationAlias) {
+      return { ok: false, queuedBytes: 0 };
+    }
+
+    const address =
+      addressHint ||
+      this.peers.get(destinationAlias) ||
+      this.onResolveAddress(destinationAlias);
+    if (!address) {
+      return { ok: false, queuedBytes: 0 };
+    }
+
+    const localAddress = this.getAddress();
+    const metadata = { ...(packet.metadata || {}) };
+    if (
+      !metadata.replyAddress &&
+      localAddress &&
+      localAddress.host &&
+      localAddress.port
+    ) {
+      metadata.replyAddress = localAddress;
+    }
+
+    const outbound = { ...packet, metadata };
+    const lane = resolveLaneId(outbound.metadata, this.laneCount);
+    const wire = `${serializePacket(outbound)}\n`;
+    const frameBytes = Buffer.byteLength(wire, "utf8");
+    const isCover = metadata.cover === true;
+
+    const state = this._getOrCreateConnectionState(address);
+    this._enqueueFrame(state, { wire, bytes: frameBytes, isCover }, lane);
+    return { ok: true, queuedBytes: frameBytes };
   }
 
   _bindSocket(socket) {
@@ -136,7 +179,7 @@ class TcpTransport {
             if (this.onPacket) {
               this.onPacket(packet, packet.srcAlias || null);
             }
-          } catch (error) {
+          } catch (_error) {
             // swallow malformed packets for now
           }
         }
@@ -214,13 +257,18 @@ class TcpTransport {
     });
   }
 
-  _enqueueFrame(state, frame, laneId) {
+  _enqueueFrame(state, frameEntry, laneId) {
     this._clearIdleTimer(state);
     const lane = state.lanes[laneId % state.lanes.length];
-    lane.push(frame);
+    lane.push(frameEntry);
     state.pendingFrames += 1;
-    state.pendingBytes += Buffer.byteLength(frame, "utf8");
+    state.pendingBytes += frameEntry.bytes;
     this.stats.framesQueued += 1;
+    if (frameEntry.isCover) {
+      this.stats.coverFramesQueued += 1;
+    } else {
+      this.stats.realFramesQueued += 1;
+    }
     this._ensureConnection(state);
     this._scheduleFlush(state);
   }
@@ -238,7 +286,8 @@ class TcpTransport {
       state.flushTimer = { kind: "immediate", handle };
       return;
     }
-    const jitter = this.flushJitterMs > 0 ? crypto.randomInt(0, this.flushJitterMs + 1) : 0;
+    const jitter =
+      this.flushJitterMs > 0 ? crypto.randomInt(0, this.flushJitterMs + 1) : 0;
     const handle = setTimeout(() => {
       state.flushTimer = null;
       this._flushConnection(state);
@@ -272,6 +321,10 @@ class TcpTransport {
     try {
       const writable = state.socket.write(batch.payload);
       this.stats.framesSent += batch.frames;
+      this.stats.realFramesSent += batch.realFrames;
+      this.stats.coverFramesSent += batch.coverFrames;
+      this.stats.realBytesSent += batch.realBytes;
+      this.stats.coverBytesSent += batch.coverBytes;
       this.stats.batchesSent += 1;
       if (!writable) {
         state.waitingDrain = true;
@@ -291,6 +344,10 @@ class TcpTransport {
     const frames = [];
     let frameCount = 0;
     let bytes = 0;
+    let realFrames = 0;
+    let coverFrames = 0;
+    let realBytes = 0;
+    let coverBytes = 0;
 
     while (
       state.pendingFrames > 0 &&
@@ -304,17 +361,28 @@ class TcpTransport {
         if (!lane.length) {
           continue;
         }
-        const frame = lane[0];
-        const frameBytes = Buffer.byteLength(frame, "utf8");
+
+        const frameEntry = lane[0];
+        const frameBytes = frameEntry.bytes;
         if (frameCount > 0 && bytes + frameBytes > this.batchMaxBytes) {
           break;
         }
+
         lane.shift();
         state.pendingFrames -= 1;
         state.pendingBytes -= frameBytes;
-        frames.push(frame);
+        frames.push(frameEntry.wire);
         bytes += frameBytes;
         frameCount += 1;
+        if (frameEntry.isCover) {
+          coverFrames += 1;
+          coverBytes += frameBytes;
+          this.stats.coverFramesQueued = Math.max(0, this.stats.coverFramesQueued - 1);
+        } else {
+          realFrames += 1;
+          realBytes += frameBytes;
+          this.stats.realFramesQueued = Math.max(0, this.stats.realFramesQueued - 1);
+        }
         state.laneCursor = (laneIndex + 1) % state.lanes.length;
         pulled = true;
         if (frameCount >= this.batchMaxFrames || bytes >= this.batchMaxBytes) {
@@ -333,7 +401,103 @@ class TcpTransport {
     return {
       payload: frames.join(""),
       frames: frameCount,
+      realFrames,
+      coverFrames,
+      realBytes,
+      coverBytes,
     };
+  }
+
+  _scheduleCoverTick() {
+    if (!this.started || !this.coverTrafficEnabled || this._coverTimer) {
+      return;
+    }
+    const jitter =
+      this.coverJitterMs > 0 ? crypto.randomInt(0, this.coverJitterMs + 1) : 0;
+    this._coverTimer = setTimeout(() => {
+      this._coverTimer = null;
+      this._runCoverTick();
+      this._scheduleCoverTick();
+    }, this.coverIntervalMs + jitter);
+  }
+
+  _runCoverTick() {
+    if (!this.started || !this.coverTrafficEnabled) {
+      return;
+    }
+
+    this._refillCoverTokens();
+    const peerAliases = Array.from(this.peers.keys());
+    if (!peerAliases.length) {
+      return;
+    }
+
+    const bytesBudget = Math.floor(this._coverTokens);
+    if (bytesBudget < this.coverPacketBytes) {
+      return;
+    }
+
+    const rateFrameBudget = Math.floor(bytesBudget / this.coverPacketBytes);
+    const ratioFrameBudget = this._calculateCoverFrameBudget();
+    const frameBudget = Math.min(
+      this.coverPeerFanout,
+      rateFrameBudget,
+      ratioFrameBudget
+    );
+    if (frameBudget <= 0) {
+      return;
+    }
+
+    for (let i = 0; i < frameBudget; i += 1) {
+      const alias =
+        peerAliases[(this._coverPeerCursor + i) % peerAliases.length];
+      const packet = this._buildCoverPacket(alias);
+      const queued = this._queuePacket(packet, alias);
+      if (!queued.ok) {
+        this.stats.coverFramesDropped += 1;
+        continue;
+      }
+      this._coverTokens = Math.max(0, this._coverTokens - queued.queuedBytes);
+    }
+
+    this._coverPeerCursor =
+      (this._coverPeerCursor + frameBudget) % peerAliases.length;
+  }
+
+  _calculateCoverFrameBudget() {
+    const budget =
+      Math.floor(this.stats.realFramesSent * this.maxCoverToRealRatio) +
+      this.coverWarmupFrames;
+    const used = this.stats.coverFramesSent + this.stats.coverFramesQueued;
+    return Math.max(0, budget - used);
+  }
+
+  _refillCoverTokens() {
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - this._coverLastRefillAt);
+    this._coverLastRefillAt = now;
+
+    if (this.coverRateBytesPerSec <= 0) {
+      return;
+    }
+
+    const refill = (elapsedMs / 1000) * this.coverRateBytesPerSec;
+    this._coverTokens = Math.min(this.coverBurstBytes, this._coverTokens + refill);
+  }
+
+  _buildCoverPacket(destinationAlias) {
+    return createPacket({
+      srcAlias: this.alias,
+      dstAlias: destinationAlias,
+      payload: crypto.randomBytes(this.coverPacketBytes),
+      ttl: this.coverTtl,
+      metadata: {
+        cover: true,
+        noise: true,
+        routeLane: crypto.randomInt(0, this.laneCount),
+        routeEntropy: crypto.randomBytes(2).toString("hex"),
+      },
+    });
   }
 
   _scheduleIdleClose(state) {
@@ -382,6 +546,14 @@ class TcpTransport {
     }
     state.flushTimer = null;
   }
+
+  _clearCoverTimer() {
+    if (!this._coverTimer) {
+      return;
+    }
+    clearTimeout(this._coverTimer);
+    this._coverTimer = null;
+  }
 }
 
 function decodeFrame(frame) {
@@ -396,6 +568,17 @@ function decodeFrame(frame) {
 function normalizeInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function normalizeRatio(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
     return fallback;
   }
   return parsed;
