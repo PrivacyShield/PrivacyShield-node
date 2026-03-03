@@ -15,11 +15,16 @@ Completed in the current prototype:
 - [x] Introduce region quantization helpers and region tables for long hops.
 - [x] Add a stability-focused unit test harness for in-process networks and routing behaviors.
 - [x] Add practical TCP server/client CLI flows with persistent identities for real usage.
+- [x] Add a performance optimization track with benchmark scripts and `OPTIMIZATIONS.md`.
+- [x] Optimize routing next-hop selection to avoid full neighbor sorting on coordinate-based forwarding.
+- [x] Optimize TCP framing path by removing outer base64 framing overhead while keeping legacy compatibility.
 
 Current next implementation focus:
 
 - [ ] Extend transport adapters beyond TCP (QUIC/WebRTC where practical).
 - [ ] Add bootstrap discovery and DHT replication strategies.
+- [ ] Add TCP connection reuse/write batching and benchmark under long-lived traffic.
+- [ ] Add routing/transport performance CI gates with regression thresholds.
 - [ ] Add conformance vectors, fuzz-style tests, and adversarial routing simulations.
 
 ## General roadmap (phases)

@@ -29,8 +29,8 @@ function createPacket({
   };
 }
 
-function encodePacket(packet) {
-  const wire = {
+function packetToWire(packet) {
+  return {
     version: packet.version,
     srcAlias: packet.srcAlias,
     dstAlias: packet.dstAlias,
@@ -40,11 +40,18 @@ function encodePacket(packet) {
     metadata: packet.metadata || {},
     encryption: packet.encryption || null,
   };
-  return Buffer.from(JSON.stringify(wire));
 }
 
-function decodePacket(buffer) {
-  const wire = JSON.parse(buffer.toString("utf8"));
+function serializePacket(packet) {
+  return JSON.stringify(packetToWire(packet));
+}
+
+function encodePacket(packet) {
+  return Buffer.from(serializePacket(packet));
+}
+
+function parsePacketString(wireString) {
+  const wire = JSON.parse(wireString);
   return {
     version: wire.version,
     srcAlias: wire.srcAlias,
@@ -57,10 +64,16 @@ function decodePacket(buffer) {
   };
 }
 
+function decodePacket(buffer) {
+  return parsePacketString(buffer.toString("utf8"));
+}
+
 module.exports = {
   DEFAULT_TTL,
   PROTOCOL_VERSION,
   createPacket,
+  serializePacket,
+  parsePacketString,
   encodePacket,
   decodePacket,
 };

@@ -21,7 +21,13 @@ const {
   quantizeAcrossScales,
   distance,
 } = require("./coordinates");
-const { createPacket, encodePacket, decodePacket } = require("./packet");
+const {
+  createPacket,
+  serializePacket,
+  parsePacketString,
+  encodePacket,
+  decodePacket,
+} = require("./packet");
 const {
   createSymmetricKey,
   encryptPayload,
@@ -63,6 +69,8 @@ module.exports = {
   quantizeAcrossScales,
   distance,
   createPacket,
+  serializePacket,
+  parsePacketString,
   encodePacket,
   decodePacket,
   createSymmetricKey,

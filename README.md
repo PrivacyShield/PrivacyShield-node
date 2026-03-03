@@ -136,6 +136,15 @@ Watch mode for rapid iteration:
 npm run test:watch
 ```
 
+### Run performance benchmarks
+
+```bash
+npm run bench:routing -- --neighbors 5000 --iterations 20000 --max-paths 3
+npm run bench:framing -- --iterations 100000 --payload-bytes 1024
+```
+
+Performance strategy, benchmark snapshots, and tuning guidance live in `OPTIMIZATIONS.md`.
+
 ### Practical TCP server/client workflow
 
 Create persistent identities:
@@ -240,10 +249,13 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
 - `src/crypto.js`: AEAD helpers for payload protection
+- `src/packet.js`: packet creation and wire serialization/parsing helpers
 - `src/handshake.js`: X25519 + Ed25519 session establishment utilities
 - `src/identity-store.js`: filesystem identity persistence helpers
 - `src/demo.js`: in-process helpers for local testing
 - `src/cli.js`: practical CLI for identity management and TCP server/client workflows
+- `scripts/bench-routing.js`: routing selection benchmark helper
+- `scripts/bench-framing.js`: TCP framing benchmark helper
 
 ### Stability test harness (current)
 
@@ -251,6 +263,7 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `test/routing.test.js`: neighbor table and routing multipath/churn checks
 - `test/identity-dht.test.js`: alias record validation and DHT expiry behavior
 - `test/handshake-crypto.test.js`: handshake integrity and AEAD tamper resistance
+- `test/packet.test.js`: packet wire serialization/parsing compatibility
 - `test/coordinates.test.js`: coordinate estimation, quantization, and distance invariants
 - `test/identity-store.test.js`: filesystem identity persistence and integrity checks
 - `test/tcp.integration.test.js`: real TCP handshake and encrypted message flow with learned return routes

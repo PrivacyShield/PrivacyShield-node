@@ -12,7 +12,9 @@
     "identity:create": "node src/cli.js identity:create",
     "identity:show": "node src/cli.js identity:show",
     "node:server": "node src/cli.js server",
-    "node:client": "node src/cli.js client"
+    "node:client": "node src/cli.js client",
+    "bench:routing": "node scripts/bench-routing.js",
+    "bench:framing": "node scripts/bench-framing.js"
   },
   "repository": {
     "type": "git",

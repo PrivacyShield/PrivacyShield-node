@@ -1,5 +1,5 @@
 const net = require("net");
-const { encodePacket, decodePacket } = require("../packet");
+const { serializePacket, parsePacketString, decodePacket } = require("../packet");
 
 class TcpTransport {
   constructor(options = {}) {
@@ -75,7 +75,7 @@ class TcpTransport {
     }
     const outbound = { ...packet, metadata };
 
-    const wire = encodePacket(outbound).toString("base64") + "\n";
+    const wire = `${serializePacket(outbound)}\n`;
     const socket = net.createConnection(address.port, address.host);
     socket.on("error", () => socket.destroy());
     socket.write(wire, () => socket.end());
@@ -92,7 +92,7 @@ class TcpTransport {
         buffer = buffer.slice(idx + 1);
         if (frame) {
           try {
-            const packet = decodePacket(Buffer.from(frame, "base64"));
+            const packet = decodeFrame(frame);
             if (this.onPacket) {
               this.onPacket(packet, packet.srcAlias || null);
             }
@@ -103,6 +103,15 @@ class TcpTransport {
         idx = buffer.indexOf("\n");
       }
     });
+  }
+}
+
+function decodeFrame(frame) {
+  try {
+    return parsePacketString(frame);
+  } catch (_error) {
+    // Backward-compatible fallback for older base64-framed senders.
+    return decodePacket(Buffer.from(frame, "base64"));
   }
 }
 

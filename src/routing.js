@@ -34,6 +34,10 @@ class NeighborTable {
     return Array.from(this.entries.values());
   }
 
+  values() {
+    return this.entries.values();
+  }
+
   updateLatency(alias, latencyMs) {
     const entry = this.entries.get(alias);
     if (!entry) {
@@ -55,25 +59,18 @@ class SimpleRoutingEngine {
   }
 
   selectNextHops(packet, neighborTable, targetCoordinates = null) {
+    if (targetCoordinates) {
+      return this._selectNearest(neighborTable.values(), targetCoordinates);
+    }
+
     const neighbors = neighborTable.list();
     if (!neighbors.length) {
       return [];
     }
-
-    let sorted = neighbors;
-    if (targetCoordinates) {
-      sorted = neighbors
-        .slice()
-        .sort(
-          (a, b) =>
-            distance(a.coordinates, targetCoordinates) -
-            distance(b.coordinates, targetCoordinates)
-        );
-    } else if (this.allowRandomFallback) {
-      sorted = this._maybeChurn(neighbors.slice());
+    if (!this.allowRandomFallback) {
+      return neighbors.slice(0, this.maxPaths);
     }
-
-    return sorted.slice(0, this.maxPaths);
+    return this._maybeChurn(neighbors.slice()).slice(0, this.maxPaths);
   }
 
   _maybeChurn(neighbors) {
@@ -83,6 +80,31 @@ class SimpleRoutingEngine {
       this._lastChurnAt = now;
     }
     return this._cachedOrder.slice();
+  }
+
+  _selectNearest(neighborIterator, targetCoordinates) {
+    const limit = Math.max(1, this.maxPaths);
+    const best = [];
+    for (const neighbor of neighborIterator) {
+      const rank = distance(neighbor.coordinates, targetCoordinates);
+      if (best.length === 0) {
+        best.push({ neighbor, rank });
+        continue;
+      }
+
+      let insertAt = best.length;
+      while (insertAt > 0 && rank < best[insertAt - 1].rank) {
+        insertAt -= 1;
+      }
+
+      if (insertAt < limit) {
+        best.splice(insertAt, 0, { neighbor, rank });
+        if (best.length > limit) {
+          best.pop();
+        }
+      }
+    }
+    return best.map((entry) => entry.neighbor);
   }
 }
 
