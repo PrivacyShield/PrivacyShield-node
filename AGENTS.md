@@ -14,12 +14,18 @@
 - `src/shuffle.js`: shuffle policies (padding and delay)
 - `src/crypto.js`: AEAD helpers for payload protection
 - `src/handshake.js`: X25519 + Ed25519 session establishment helpers
+- `src/identity-store.js`: filesystem identity persistence helpers for practical node usage
 - `src/demo.js`: in-process helpers for local testing
+- `src/cli.js`: practical CLI (`identity:create`, `identity:show`, `server`, `client`)
 
 ## Test workflow
 
 - `npm test`: run the stability/unit test suite (`test/**/*.test.js`) using Node's built-in test runner.
 - `npm run test:watch`: rerun unit tests in watch mode during active development.
+- `npm run identity:create -- --identity <path>`: create a persistent identity file for a node.
+- `npm run identity:show -- --identity <path>`: print alias metadata for an identity file.
+- `npm run node:server -- --identity <path> [--host <host>] [--port <port>] [--echo]`: run a practical TCP server node.
+- `npm run node:client -- --identity <path> --peer-alias <alias> --peer-host <host> --peer-port <port> --message <text> [--encrypt] [--await-reply]`: send a practical client message over TCP.
 
 ## Test structure
 
@@ -28,4 +34,6 @@
 - `test/identity-dht.test.js`: alias record validation + DHT acceptance/expiry behavior
 - `test/handshake-crypto.test.js`: handshake integrity and AEAD roundtrips/tamper rejection
 - `test/coordinates.test.js`: coordinate estimation, quantization, and distance helper invariants
+- `test/identity-store.test.js`: filesystem identity persistence + integrity guards
+- `test/tcp.integration.test.js`: real TCP handshake/message integration with learned return routes
 - `test/helpers.js`: async event waiting helper shared by integration tests

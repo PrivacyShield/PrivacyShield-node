@@ -36,7 +36,21 @@ function waitForEvent(emitter, eventName, options = {}) {
   });
 }
 
+async function waitForCondition(check, options = {}) {
+  const timeoutMs = options.timeoutMs || 1_000;
+  const intervalMs = options.intervalMs || 10;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const value = check();
+    if (value) {
+      return value;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
 module.exports = {
   waitForEvent,
+  waitForCondition,
 };
-

@@ -62,7 +62,20 @@ class TcpTransport {
     if (!address) {
       return false;
     }
-    const wire = encodePacket(packet).toString("base64") + "\n";
+
+    const localAddress = this.getAddress();
+    const metadata = { ...(packet.metadata || {}) };
+    if (
+      !metadata.replyAddress &&
+      localAddress &&
+      localAddress.host &&
+      localAddress.port
+    ) {
+      metadata.replyAddress = localAddress;
+    }
+    const outbound = { ...packet, metadata };
+
+    const wire = encodePacket(outbound).toString("base64") + "\n";
     const socket = net.createConnection(address.port, address.host);
     socket.on("error", () => socket.destroy());
     socket.write(wire, () => socket.end());

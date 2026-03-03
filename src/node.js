@@ -108,7 +108,7 @@ class PrivacyShieldNode extends EventEmitter {
     if (this.transport.registerPeer) {
       this.transport.registerPeer(alias, address);
     }
-    return this.neighbors.add({ alias, address });
+    return this.addNeighbor({ alias, address });
   }
 
   registerSessionKey(alias, key) {
@@ -251,6 +251,7 @@ class PrivacyShieldNode extends EventEmitter {
     }
 
     if (fromAlias) {
+      this._learnPeerFromPacket(fromAlias, packet);
       const latencyMs =
         packet.metadata && typeof packet.metadata.latencyMs === "number"
           ? packet.metadata.latencyMs
@@ -331,6 +332,46 @@ class PrivacyShieldNode extends EventEmitter {
       record,
       expiresAt: record.expiresAt,
     });
+  }
+
+  _learnPeerFromPacket(fromAlias, packet) {
+    const replyAddress =
+      packet.metadata && this._isValidPeerAddress(packet.metadata.replyAddress)
+        ? packet.metadata.replyAddress
+        : null;
+
+    const existing = this.neighbors.get(fromAlias);
+    if (!existing) {
+      this.addNeighbor({
+        alias: fromAlias,
+        address: replyAddress || fromAlias,
+      });
+      return;
+    }
+
+    if (
+      replyAddress &&
+      (!existing.address ||
+        typeof existing.address !== "object" ||
+        existing.address.host !== replyAddress.host ||
+        existing.address.port !== replyAddress.port)
+    ) {
+      this.addNeighbor({
+        ...existing,
+        address: replyAddress,
+      });
+    }
+  }
+
+  _isValidPeerAddress(address) {
+    return (
+      !!address &&
+      typeof address === "object" &&
+      typeof address.host === "string" &&
+      Number.isInteger(address.port) &&
+      address.port > 0 &&
+      address.port < 65536
+    );
   }
 
   recordLatencySample(alias, latencyMs) {

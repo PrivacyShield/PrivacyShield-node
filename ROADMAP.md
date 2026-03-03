@@ -14,6 +14,7 @@ Completed in the current prototype:
 - [x] Add coordinate sampling hooks for latency-derived coordinate updates.
 - [x] Introduce region quantization helpers and region tables for long hops.
 - [x] Add a stability-focused unit test harness for in-process networks and routing behaviors.
+- [x] Add practical TCP server/client CLI flows with persistent identities for real usage.
 
 Current next implementation focus:
 

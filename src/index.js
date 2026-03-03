@@ -33,6 +33,11 @@ const {
   finalizeHandshake,
   deriveSessionKey,
 } = require("./handshake");
+const {
+  saveIdentityToFile,
+  loadIdentityFromFile,
+  loadOrCreateIdentity,
+} = require("./identity-store");
 const { linkPeers, createInMemoryPair } = require("./demo");
 
 module.exports = {
@@ -67,6 +72,9 @@ module.exports = {
   acceptHandshakeOffer,
   finalizeHandshake,
   deriveSessionKey,
+  saveIdentityToFile,
+  loadIdentityFromFile,
+  loadOrCreateIdentity,
   linkPeers,
   createInMemoryPair,
 };

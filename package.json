@@ -3,9 +3,16 @@
   "version": "0.1.0",
   "description": "PrivacyShield node implementation",
   "main": "src/index.js",
+  "bin": {
+    "privacyshield": "src/cli.js"
+  },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "test:watch": "node --test --watch \"test/**/*.test.js\""
+    "test:watch": "node --test --watch \"test/**/*.test.js\"",
+    "identity:create": "node src/cli.js identity:create",
+    "identity:show": "node src/cli.js identity:show",
+    "node:server": "node src/cli.js server",
+    "node:client": "node src/cli.js client"
   },
   "repository": {
     "type": "git",

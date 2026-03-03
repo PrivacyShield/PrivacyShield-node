@@ -136,6 +136,40 @@ Watch mode for rapid iteration:
 npm run test:watch
 ```
 
+### Practical TCP server/client workflow
+
+Create persistent identities:
+
+```bash
+npm run identity:create -- --identity ./.privacyshield/server.identity.json
+npm run identity:create -- --identity ./.privacyshield/client.identity.json
+```
+
+Show an identity alias (for sharing with peers):
+
+```bash
+npm run identity:show -- --identity ./.privacyshield/server.identity.json
+```
+
+Start a server node:
+
+```bash
+npm run node:server -- --identity ./.privacyshield/server.identity.json --host 127.0.0.1 --port 4001 --echo
+```
+
+Send from a client node (replace `<SERVER_ALIAS>` with the server alias):
+
+```bash
+npm run node:client -- \
+  --identity ./.privacyshield/client.identity.json \
+  --peer-alias <SERVER_ALIAS> \
+  --peer-host 127.0.0.1 \
+  --peer-port 4001 \
+  --message "hello practical" \
+  --encrypt \
+  --await-reply
+```
+
 ### Quick in-process demo (memory transport)
 
 ```js
@@ -207,7 +241,9 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/shuffle.js`: shuffle policies (padding and delay)
 - `src/crypto.js`: AEAD helpers for payload protection
 - `src/handshake.js`: X25519 + Ed25519 session establishment utilities
+- `src/identity-store.js`: filesystem identity persistence helpers
 - `src/demo.js`: in-process helpers for local testing
+- `src/cli.js`: practical CLI for identity management and TCP server/client workflows
 
 ### Stability test harness (current)
 
@@ -216,3 +252,5 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `test/identity-dht.test.js`: alias record validation and DHT expiry behavior
 - `test/handshake-crypto.test.js`: handshake integrity and AEAD tamper resistance
 - `test/coordinates.test.js`: coordinate estimation, quantization, and distance invariants
+- `test/identity-store.test.js`: filesystem identity persistence and integrity checks
+- `test/tcp.integration.test.js`: real TCP handshake and encrypted message flow with learned return routes
