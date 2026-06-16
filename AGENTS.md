@@ -10,7 +10,7 @@
 - `src/transport/memory.js`: in-process transport for local demos/tests
 - `src/transport/tcp.js`: TCP adapter for real network IO (pooling, batching, cover scheduler)
 - `src/transport/udp.js`: UDP adapter for alternative paths + NAT keepalive probes
-- `src/transport/adaptive.js`: dynamic multi-transport wrapper (UDP/TCP fallback strategy)
+- `src/transport/adaptive.js`: dynamic multi-transport wrapper (UDP/TCP fallback strategy, ACK-driven delivery-confidence path scoring, throw-safe sends)
 - `src/transport/base.js`: minimal transport contract
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
@@ -62,6 +62,7 @@
 - `test/tcp.integration.test.js`: real TCP handshake/message integration with learned return routes, legacy frame compatibility, and bounded cover scheduling
 - `test/udp.integration.test.js`: real UDP handshake/message integration and session protection
 - `test/adaptive.integration.test.js`: adaptive transport UDP/TCP fallback behavior
+- `test/adaptive.unit.test.js`: adaptive delivery-confidence scoring (return-traffic confirmation, acceptance-vs-delivery weighting, ACK-timeout penalties/fallback, throw-safe send)
 - `test/tunnel.integration.test.js`: tunnel binding/gateway interoperability for legacy TCP traffic
 - `test/netsim.test.js`: simulation stability assertions (defaults, IPv4/IPv6+NAT effects, adversarial MITM pressure, artifact generation)
 - `test/helpers.js`: async event waiting helper shared by integration tests

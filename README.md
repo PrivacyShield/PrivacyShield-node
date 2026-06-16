@@ -359,7 +359,7 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `src/transport/memory.js`: in-process transport for local demos/tests
 - `src/transport/tcp.js`: TCP adapter for real network IO (newline-framed, pooling, batching, cover scheduler)
 - `src/transport/udp.js`: UDP adapter with keepalive probes for NAT-sensitive paths
-- `src/transport/adaptive.js`: dynamic UDP/TCP fallback wrapper
+- `src/transport/adaptive.js`: dynamic UDP/TCP fallback wrapper with ACK-driven delivery-confidence path scoring
 - `src/transport/base.js`: minimal transport contract
 - `src/dht.js`: in-memory DHT store for alias records
 - `src/shuffle.js`: shuffle policies (padding and delay)
@@ -392,5 +392,6 @@ nodeA.sendMessage(nodeB.alias, "hello over TCP");
 - `test/tcp.integration.test.js`: real TCP handshake and encrypted message flow with learned return routes plus bounded cover scheduling
 - `test/udp.integration.test.js`: real UDP handshake and encrypted message flow
 - `test/adaptive.integration.test.js`: adaptive UDP/TCP fallback behavior
+- `test/adaptive.unit.test.js`: delivery-confidence path scoring, ACK-timeout fallback, and resilient send under throwing transports
 - `test/tunnel.integration.test.js`: transparent tunnel binding/gateway data-path behavior
 - `test/netsim.test.js`: deterministic simulation stability checks (MITM pressure + report artifacts)

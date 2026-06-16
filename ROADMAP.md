@@ -28,13 +28,13 @@ Completed in the current prototype:
 - [x] Add ring-aware routing IDs with provider/sub-region diversity constraints.
 - [x] Add tunnel binding/gateway workflows to proxy non-PrivacyShield TCP clients/servers.
 - [x] Add advanced `netsim/` adversarial simulator (500-node/30-minute virtual profile) with provider diversity, IPv4/IPv6 + router/NAT modeling, bandwidth/latency variability, reputation TTL, randomized MITM campaigns, and report artifacts.
+- [x] Harden adaptive transport delivery confidence with ACK-driven, time-decaying path scoring: return traffic confirms paths, local acceptance is weighted as weak evidence, unacked sends time out into losses that steer fallback, and throwing transports (e.g. bad UDP ports) no longer abort a send.
 
 Current next implementation focus:
 
 - [ ] Extend transport adapters beyond TCP/UDP (QUIC/WebRTC where practical).
 - [ ] Add bootstrap discovery and DHT replication strategies.
 - [ ] Add adaptive threshold calibration for perf gates across heterogeneous CI runners.
-- [ ] Harden adaptive transport delivery confidence (ACK-driven fallback and path scoring).
 - [ ] Harden rekey flow for concurrent bi-directional rotations under packet loss.
 - [ ] Add conformance vectors and fuzz-style tests, and extend adversarial simulation scenarios across additional transport adapters.
 
