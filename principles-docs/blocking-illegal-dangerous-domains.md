@@ -1,4 +1,4 @@
-This method can be used, optionally but enabled by default, to allow a node to block a certain content if dangerous and overall illegal (but without moralism about legal porns).
+This method can be used, optionally but enabled by default, to allow a node to block a certain content if dangerous and overall illegal (but without moralism about legal content ;)
 
 ---
 
